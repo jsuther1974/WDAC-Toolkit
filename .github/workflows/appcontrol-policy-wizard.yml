@@ -2,7 +2,6 @@ name: App Control Policy Wizard
 
 on:
   push:
-    branches: [master]
     paths:
       - "AppControl-Policy-Wizard/**"
       - ".github/workflows/appcontrol-policy-wizard.yml"
