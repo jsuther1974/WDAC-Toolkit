@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <RootNamespace>AppControl.PolicyWizard.Parity.Tests</RootNamespace>
+    <AssemblyName>AppControl.PolicyWizard.Parity.Tests</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AppControl.PolicyWizard.Core\AppControl.PolicyWizard.Core.csproj" />
+    <ProjectReference Include="..\..\src\AppControl.PolicyWizard.Infrastructure.Windows\AppControl.PolicyWizard.Infrastructure.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\assets\policyTemplates\*.xml">
+      <Link>SuccessorTemplates\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\..\WDAC-Policy-Wizard\app\Resources\policyTemplates\DefaultWindows_Audit.xml">
+      <Link>LegacyTemplates\DefaultWindows_Audit.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\..\WDAC-Policy-Wizard\app\Resources\policyTemplates\SignedReputable.xml">
+      <Link>LegacyTemplates\SignedReputable.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\migration\capabilities.json">
+      <Link>Migration\capabilities.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\src\AppControl.PolicyWizard.Infrastructure.Windows\Scripts\CreateBasePolicy.ps1">
+      <Link>Scripts\CreateBasePolicy.ps1</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-09-14",
+  "statusOrder": [
+    "legacy-only",
+    "characterized",
+    "implemented",
+    "validated",
+    "legacy-retired",
+    "deferred"
+  ],
+  "decisionStatusOrder": [
+    "pending-review",
+    "proposed",
+    "accepted"
+  ],
+  "capabilities": [
+    {
+      "id": "base-policy-signed-reputable",
+      "area": "Base policy",
+      "name": "Create Signed and reputable policy",
+      "priority": "P0",
+      "migrationStatus": "validated",
+      "decisionStatus": "accepted",
+      "targetDirection": "Recommended and selected by default in the unified create-or-edit workflow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/Resources/policyTemplates/SignedReputable.xml",
+      "successorEvidence": [
+        "AppControl.PolicyWizard.Core.Tests",
+        "AppControl.PolicyWizard.Parity.Tests"
+      ]
+    },
+    {
+      "id": "base-policy-windows-only",
+      "area": "Base policy",
+      "name": "Create Windows-only policy",
+      "priority": "P0",
+      "migrationStatus": "validated",
+      "decisionStatus": "accepted",
+      "targetDirection": "Available as the restrictive built-in template in the unified create-or-edit workflow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/Resources/policyTemplates/DefaultWindows_Audit.xml",
+      "successorEvidence": [
+        "AppControl.PolicyWizard.Core.Tests",
+        "AppControl.PolicyWizard.Parity.Tests"
+      ]
+    },
+    {
+      "id": "edit-existing-xml",
+      "area": "Edit policy",
+      "name": "Edit an existing XML policy",
+      "priority": "P0",
+      "migrationStatus": "validated",
+      "decisionStatus": "accepted",
+      "targetDirection": "Existing XML policies are another source in the unified create-or-edit workflow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src/EditWorkflow.cs",
+      "successorEvidence": [
+        "AppControl.PolicyWizard.Core.Tests",
+        "AppControl.PolicyWizard.Parity.Tests"
+      ]
+    },
+    {
+      "id": "policy-option-editing",
+      "area": "Base policy",
+      "name": "Review and modify policy options",
+      "priority": "P0",
+      "migrationStatus": "legacy-only",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Present multiple-policy options first and move legacy single-policy format behind an advanced compatibility path.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src/ConfigTemplate.cs",
+      "successorEvidence": []
+    },
+    {
+      "id": "custom-rule-authoring",
+      "area": "Rules",
+      "name": "Create and edit custom rules",
+      "priority": "P0",
+      "migrationStatus": "legacy-only",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Use one rule-creation workflow with files, folders, publishers, hashes, and event data as rule sources.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src/CustomRules.cs",
+      "successorEvidence": []
+    },
+    {
+      "id": "binary-policy-import",
+      "area": "Edit policy",
+      "name": "Open an existing binary policy",
+      "priority": "P1",
+      "migrationStatus": "legacy-only",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Treat binary conversion as an input adapter to the unified create-or-edit workflow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src/EditWorkflow.cs",
+      "successorEvidence": []
+    },
+    {
+      "id": "supplemental-policy",
+      "area": "Supplemental policy",
+      "name": "Create and edit supplemental policies",
+      "priority": "P1",
+      "migrationStatus": "legacy-only",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Integrate supplemental policy creation and editing into the same source-based workflow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src",
+      "successorEvidence": []
+    },
+    {
+      "id": "policy-merge",
+      "area": "Merge",
+      "name": "Merge App Control policies",
+      "priority": "P1",
+      "migrationStatus": "legacy-only",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Provide policy merge as an explicit operation that produces a reviewable target policy.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src/MergePolicy.cs",
+      "successorEvidence": []
+    },
+    {
+      "id": "event-derived-rules",
+      "area": "Rules",
+      "name": "Create rules from event data",
+      "priority": "P2",
+      "migrationStatus": "deferred",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Reintegrate event-derived rules as a source within rule creation rather than as a top-level flow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/src",
+      "successorEvidence": []
+    },
+    {
+      "id": "production-deployment",
+      "area": "Product",
+      "name": "Signed installation, upgrade, and servicing",
+      "priority": "P0",
+      "migrationStatus": "implemented",
+      "decisionStatus": "proposed",
+      "targetDirection": "Ship with an independent package identity and side-by-side servicing until legacy retirement.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/MSIX",
+      "successorEvidence": [
+        "Development package identity and side-by-side launch"
+      ]
+    },
+    {
+      "id": "accessibility-localization",
+      "area": "Product",
+      "name": "Accessibility and localization readiness",
+      "priority": "P1",
+      "migrationStatus": "characterized",
+      "decisionStatus": "pending-review",
+      "targetDirection": "Make accessibility and localization acceptance criteria part of every migrated workflow.",
+      "legacyLocation": "WDAC-Policy-Wizard/app/Properties/Resources.resx",
+      "successorEvidence": [
+        "Accessible source cards and keyboard-addressable navigation"
+      ]
+    }
+  ]
+}

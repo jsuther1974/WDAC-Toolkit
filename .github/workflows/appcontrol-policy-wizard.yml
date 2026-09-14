@@ -1,0 +1,94 @@
+name: App Control Policy Wizard
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "AppControl-Policy-Wizard/**"
+      - ".github/workflows/appcontrol-policy-wizard.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "AppControl-Policy-Wizard/**"
+      - ".github/workflows/appcontrol-policy-wizard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Core and parity tests
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Run core tests
+        run: >
+          dotnet test
+          .\AppControl-Policy-Wizard\tests\AppControl.PolicyWizard.Core.Tests\AppControl.PolicyWizard.Core.Tests.csproj
+          --configuration Debug
+          --nologo
+
+      - name: Run parity tests
+        run: >
+          dotnet test
+          .\AppControl-Policy-Wizard\tests\AppControl.PolicyWizard.Parity.Tests\AppControl.PolicyWizard.Parity.Tests.csproj
+          --configuration Debug
+          --nologo
+
+      - name: Generate migration burndown
+        shell: pwsh
+        run: |
+          $report = & .\AppControl-Policy-Wizard\migration\Get-Burndown.ps1 | Out-String
+          $report | Tee-Object -FilePath .\AppControl-Policy-Wizard\migration\burndown.txt
+
+      - name: Upload migration burndown
+        uses: actions/upload-artifact@v7
+        with:
+          name: appcontrol-policy-wizard-burndown
+          path: AppControl-Policy-Wizard\migration\burndown.txt
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ARM64
+            runtime: win-arm64
+          - platform: x64
+            runtime: win-x64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore all Windows architectures
+        run: >
+          dotnet restore
+          .\AppControl-Policy-Wizard\src\AppControl.PolicyWizard.WinUI\AppControl.PolicyWizard.WinUI.csproj
+          -p:Platform=${{ matrix.platform }}
+          --nologo
+
+      - name: Build
+        run: >
+          dotnet build
+          .\AppControl-Policy-Wizard\src\AppControl.PolicyWizard.WinUI\AppControl.PolicyWizard.WinUI.csproj
+          --configuration Debug
+          --runtime ${{ matrix.runtime }}
+          -p:Platform=${{ matrix.platform }}
+          --no-restore
+          --nologo
