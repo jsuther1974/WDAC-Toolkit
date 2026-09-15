@@ -26,4 +26,13 @@ internal static class PolicyWorkflowFactory
             templatePaths,
             templateManifest: templateManifest);
     }
+
+    public static ISignerRuleGenerator CreateSignerRuleGenerator()
+    {
+        return new PowerShellSignerRuleGenerator(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "Scripts",
+                "CreateSignerRule.ps1"));
+    }
 }

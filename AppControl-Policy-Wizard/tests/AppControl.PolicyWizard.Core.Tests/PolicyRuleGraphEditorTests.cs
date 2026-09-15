@@ -201,8 +201,121 @@ public sealed class PolicyRuleGraphEditorTests
         Assert.Contains("ID_EXCEPTION", signer.ExceptionRuleIds);
         Assert.Equal(
             "Contoso.exe",
-            signer.Conditions["FileAttribute:ID_ATTRIBUTE:FileName"]);
+            signer.Conditions["FileAttribute[0].FileName"]);
         Assert.Empty(snapshot.UnknownObjectIds);
+    }
+
+    [Fact]
+    public void GeneratedFilePublisherFragmentIsRemappedAndLinkedToTargetScenario()
+    {
+        XDocument document = XDocument.Parse(
+            """
+            <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
+              <EKUs />
+              <FileRules />
+              <Signers />
+              <SigningScenarios>
+                <SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_UMCI">
+                  <ProductSigners />
+                </SigningScenario>
+              </SigningScenarios>
+              <CiSigners />
+            </SiPolicy>
+            """);
+        XDocument fragment = XDocument.Parse(
+            """
+            <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
+              <EKUs><EKU ID="ID_EKU_A" Value="010A" /></EKUs>
+              <FileRules>
+                <FileAttrib ID="ID_FILEATTRIB_A" FileName="Contoso.exe" MinimumFileVersion="2.0.0.0" />
+              </FileRules>
+              <Signers>
+                <Signer ID="ID_SIGNER_A" Name="Contoso">
+                  <CertRoot Type="TBS" Value="AABBCC" />
+                  <CertPublisher Value="Contoso Ltd" />
+                  <CertEKU ID="ID_EKU_A" />
+                  <FileAttribRef RuleID="ID_FILEATTRIB_A" />
+                </Signer>
+              </Signers>
+              <CiSigners><CiSigner SignerId="ID_SIGNER_A" /></CiSigners>
+            </SiPolicy>
+            """);
+        var candidate = new PolicyRuleCandidate(
+            "generated",
+            PolicyRuleAction.Allow,
+            PolicyRuleIdentity.FilePublisher,
+            PolicyRuleScenario.Applications,
+            "Trust Contoso by publisher and file identity",
+            "Match Contoso-signed Contoso.exe",
+            @"C:\Contoso.exe",
+            new Dictionary<string, string>
+            {
+                ["Publisher"] = "Contoso Ltd",
+                ["FileAttribute[0].FileName"] = "Contoso.exe",
+                ["FileAttribute[0].MinimumFileVersion"] = "2.0.0.0"
+            },
+            RuleTrustBreadth.Narrow,
+            RuleUpdateResilience.High,
+            RuleEvidenceQuality.Verified,
+            [],
+            CanApply: true,
+            Fragment: new PolicyRuleFragment(fragment));
+        PolicyRuleGraphEditor editor = PolicyRuleGraphEditor.FromDocument(document);
+
+        PolicyRuleChangeResult result = editor.Apply([new PolicyRuleAddition(candidate)]);
+
+        XDocument output = editor.ToDocument();
+        XNamespace ns = PolicyDocumentService.PolicyNamespace;
+        XElement signer = Assert.Single(
+            output.Root!.Element(ns + "Signers")!.Elements(ns + "Signer"));
+        string signerId = signer.Attribute("ID")!.Value;
+        string fileAttributeId =
+            signer.Element(ns + "FileAttribRef")!.Attribute("RuleID")!.Value;
+        Assert.NotEqual("ID_SIGNER_A", signerId);
+        Assert.NotEqual("ID_FILEATTRIB_A", fileAttributeId);
+        Assert.Contains(
+            output.Root.Element(ns + "FileRules")!.Elements(ns + "FileAttrib"),
+            attribute => attribute.Attribute("ID")?.Value == fileAttributeId);
+        Assert.Contains(
+            output.Root
+                .Element(ns + "SigningScenarios")!
+                .Descendants(ns + "AllowedSigner"),
+            reference => reference.Attribute("SignerId")?.Value == signerId);
+        Assert.Contains(
+            output.Root.Element(ns + "CiSigners")!.Elements(ns + "CiSigner"),
+            reference => reference.Attribute("SignerId")?.Value == signerId);
+        Assert.Single(result.Changes);
+        Assert.Equal(
+            PolicyRuleIdentity.FilePublisher,
+            Assert.Single(editor.Snapshot.Rules).Identity);
+    }
+
+    [Fact]
+    public void SignerCandidateFactoryRejectsConfigCiHashFallback()
+    {
+        XDocument fragment = XDocument.Parse(
+            """
+            <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
+              <FileRules><Allow ID="ID_ALLOW_A" Hash="ABCDEF" /></FileRules>
+              <Signers />
+            </SiPolicy>
+            """);
+        var result = new SignerRuleGenerationResult(
+            SignerRuleLevel.Publisher,
+            new PolicyRuleFragment(fragment),
+            SignerCount: 0,
+            HashRuleCount: 1,
+            Diagnostic: "ConfigCI generated a hash fallback.");
+
+        PolicyRuleCandidate candidate = SignerRuleCandidateFactory.Create(
+            @"C:\Contoso.exe",
+            PolicyRuleScenario.Applications,
+            result,
+            new PolicyRuleGraphSnapshot([], []));
+
+        Assert.False(candidate.CanApply);
+        Assert.Null(candidate.Fragment);
+        Assert.Contains("hash fallback", candidate.UnavailableReason);
     }
 
     [Fact]

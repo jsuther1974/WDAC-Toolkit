@@ -60,6 +60,12 @@ public sealed class PolicyRuleGraphEditor
             return;
         }
 
+        if (candidate.Fragment is not null)
+        {
+            AddGeneratedSignerFragment(candidate, changes);
+            return;
+        }
+
         XElement rule = candidate.Identity switch
         {
             PolicyRuleIdentity.FilePath => CreateFilePathRule(candidate),
@@ -79,6 +85,220 @@ public sealed class PolicyRuleGraphEditor
             candidate.Title,
             "Not present",
             candidate.Effect));
+    }
+
+    private void AddGeneratedSignerFragment(
+        PolicyRuleCandidate candidate,
+        ICollection<PolicySemanticChange> changes)
+    {
+        if (candidate.Identity is not PolicyRuleIdentity.PcaCertificate
+            and not PolicyRuleIdentity.Publisher
+            and not PolicyRuleIdentity.FilePublisher)
+        {
+            throw new InvalidOperationException(
+                "Only signer-based candidates can contain generated signer fragments.");
+        }
+
+        XDocument fragment = candidate.Fragment!.CloneDocument();
+        XElement fragmentRoot = fragment.Root
+            ?? throw new InvalidDataException(
+                "The generated signer fragment has no policy root.");
+        XElement[] signers = fragmentRoot
+            .Element(_namespace + "Signers")?
+            .Elements(_namespace + "Signer")
+            .ToArray()
+            ?? [];
+        if (signers.Length == 0)
+        {
+            throw new InvalidDataException(
+                "The generated fragment does not contain a signer.");
+        }
+
+        if (fragmentRoot
+            .Element(_namespace + "FileRules")?
+            .Elements()
+            .Any(rule => rule.Attribute("Hash") is not null) == true)
+        {
+            throw new InvalidDataException(
+                "The generated fragment contains hash fallback rules. Select the explicit hash alternative instead.");
+        }
+
+        RemapFragmentIds(fragmentRoot);
+        MergeSectionChildren(fragmentRoot, "EKUs");
+        MergeSectionChildren(fragmentRoot, "FileRules");
+        MergeSectionChildren(fragmentRoot, "Signers");
+        MergeSectionChildren(fragmentRoot, "CiSigners");
+
+        string[] signerIds = fragmentRoot
+            .Element(_namespace + "Signers")!
+            .Elements(_namespace + "Signer")
+            .Select(signer => signer.Attribute("ID")?.Value)
+            .Where(value => value is not null)
+            .Cast<string>()
+            .ToArray();
+        foreach (string signerId in signerIds)
+        {
+            AddSignerScenarioReferences(
+                signerId,
+                candidate.Action,
+                candidate.Scenario);
+        }
+
+        changes.Add(new PolicySemanticChange(
+            "Application rule",
+            candidate.Title,
+            "Not present",
+            candidate.Effect));
+    }
+
+    private void RemapFragmentIds(XElement fragmentRoot)
+    {
+        string[] sectionNames = ["EKUs", "FileRules", "Signers"];
+        var idMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string sectionName in sectionNames)
+        {
+            foreach (XElement element in fragmentRoot
+                         .Element(_namespace + sectionName)?
+                         .Elements()
+                     ?? [])
+            {
+                string? originalId = element.Attribute("ID")?.Value;
+                if (string.IsNullOrWhiteSpace(originalId))
+                {
+                    continue;
+                }
+
+                string prefix = element.Name.LocalName switch
+                {
+                    "Signer" => "ID_SIGNER_PW",
+                    "EKU" => "ID_EKU_PW",
+                    "FileAttrib" => "ID_FILEATTRIB_PW",
+                    "Allow" => "ID_ALLOW_PW",
+                    "Deny" => "ID_DENY_PW",
+                    _ => "ID_RULE_PW"
+                };
+                idMap[originalId] =
+                    $"{prefix}_{Guid.NewGuid():N}".ToUpperInvariant();
+            }
+        }
+
+        string[] referenceAttributes =
+        [
+            "ID",
+            "SignerId",
+            "RuleID",
+            "DenyRuleID",
+            "AllowRuleID"
+        ];
+        foreach (XAttribute attribute in fragmentRoot
+                     .DescendantsAndSelf()
+                     .Attributes()
+                     .Where(attribute =>
+                         referenceAttributes.Contains(
+                             attribute.Name.LocalName,
+                             StringComparer.Ordinal)))
+        {
+            if (idMap.TryGetValue(attribute.Value, out string? replacement))
+            {
+                attribute.Value = replacement;
+            }
+        }
+    }
+
+    private void MergeSectionChildren(XElement fragmentRoot, string sectionName)
+    {
+        XElement[] children = fragmentRoot
+            .Element(_namespace + sectionName)?
+            .Elements()
+            .Select(element => new XElement(element))
+            .ToArray()
+            ?? [];
+        if (children.Length == 0)
+        {
+            return;
+        }
+
+        XElement target = GetOrCreateRootChild(sectionName);
+        foreach (XElement child in children)
+        {
+            if (sectionName == "CiSigners"
+                && target.Elements()
+                    .Any(existing =>
+                        existing.Attribute("SignerId")?.Value
+                        == child.Attribute("SignerId")?.Value))
+            {
+                continue;
+            }
+
+            target.Add(child);
+        }
+    }
+
+    private void AddSignerScenarioReferences(
+        string signerId,
+        PolicyRuleAction action,
+        PolicyRuleScenario scenario)
+    {
+        IEnumerable<string> values = scenario switch
+        {
+            PolicyRuleScenario.Applications => ["12"],
+            PolicyRuleScenario.Drivers => ["131"],
+            PolicyRuleScenario.ApplicationsAndDrivers => ["12", "131"],
+            _ => throw new InvalidOperationException(
+                "A signer rule must target applications, drivers, or both.")
+        };
+
+        string containerName = action == PolicyRuleAction.Allow
+            ? "AllowedSigners"
+            : "DeniedSigners";
+        string referenceName = action == PolicyRuleAction.Allow
+            ? "AllowedSigner"
+            : "DeniedSigner";
+        foreach (string value in values)
+        {
+            XElement scenarioElement = GetOrCreateSigningScenario(value);
+            XElement productSigners = GetOrCreateChild(
+                scenarioElement,
+                "ProductSigners");
+            XElement references = GetOrCreateSignerReferences(
+                productSigners,
+                containerName);
+            if (!references.Elements(_namespace + referenceName).Any(reference =>
+                    reference.Attribute("SignerId")?.Value == signerId))
+            {
+                references.Add(
+                    new XElement(
+                        _namespace + referenceName,
+                        new XAttribute("SignerId", signerId)));
+            }
+        }
+    }
+
+    private XElement GetOrCreateSignerReferences(
+        XElement productSigners,
+        string containerName)
+    {
+        XElement? existing = productSigners.Element(_namespace + containerName);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var created = new XElement(_namespace + containerName);
+        XElement? insertionPoint = containerName == "AllowedSigners"
+            ? productSigners.Element(_namespace + "DeniedSigners")
+                ?? productSigners.Element(_namespace + "FileRulesRef")
+            : productSigners.Element(_namespace + "FileRulesRef");
+        if (insertionPoint is null)
+        {
+            productSigners.Add(created);
+        }
+        else
+        {
+            insertionPoint.AddBeforeSelf(created);
+        }
+
+        return created;
     }
 
     private XElement CreateFilePathRule(PolicyRuleCandidate candidate)
@@ -201,8 +421,14 @@ public sealed class PolicyRuleGraphEditor
         var created = new XElement(_namespace + localName);
         XElement? insertionPoint = localName switch
         {
+            "EKUs" => root.Element(_namespace + "FileRules")
+                ?? root.Element(_namespace + "Signers"),
             "FileRules" => root.Element(_namespace + "Signers"),
+            "Signers" => root.Element(_namespace + "SigningScenarios"),
             "SigningScenarios" => root.Element(_namespace + "UpdatePolicySigners"),
+            "CiSigners" => root.Element(_namespace + "HvciOptions")
+                ?? root.Element(_namespace + "Settings")
+                ?? root.Element(_namespace + "BasePolicyID"),
             _ => null
         };
         if (insertionPoint is null)
@@ -323,6 +549,16 @@ public sealed class PolicyRuleGraphEditor
                 element => element,
                 StringComparer.Ordinal)
             ?? new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var ekuValuesById = root.Element(ns + "EKUs")?
+            .Elements(ns + "EKU")
+            .Where(element =>
+                !string.IsNullOrWhiteSpace(element.Attribute("ID")?.Value))
+            .ToDictionary(
+                element => element.Attribute("ID")!.Value,
+                element => element.Attribute("Value")?.Value
+                    ?? element.Attribute("ID")!.Value,
+                StringComparer.Ordinal)
+            ?? new Dictionary<string, string>(StringComparer.Ordinal);
         var referencedAttributeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (XElement element in root.Element(ns + "FileRules")?.Elements() ?? [])
         {
@@ -394,6 +630,13 @@ public sealed class PolicyRuleGraphEditor
                 {
                     string? value = condition.Attribute("Value")?.Value
                         ?? condition.Attribute("ID")?.Value;
+                    if (condition.Name == ns + "CertEKU"
+                        && condition.Attribute("ID")?.Value is string ekuId
+                        && ekuValuesById.TryGetValue(ekuId, out string? ekuValue))
+                    {
+                        value = ekuValue;
+                    }
+
                     AddCondition(conditions, condition.Name.LocalName, value);
                 }
 
@@ -402,8 +645,11 @@ public sealed class PolicyRuleGraphEditor
                     .Where(value => value is not null)
                     .Cast<string>()
                     .ToArray();
-                foreach (string attributeId in attributeIds)
+                for (int attributeIndex = 0;
+                     attributeIndex < attributeIds.Length;
+                     attributeIndex++)
                 {
+                    string attributeId = attributeIds[attributeIndex];
                     referencedAttributeIds.Add(attributeId);
                     if (!fileRulesById.TryGetValue(attributeId, out XElement? attribute))
                     {
@@ -414,7 +660,7 @@ public sealed class PolicyRuleGraphEditor
                                  .Where(value => value.Name.LocalName is not "ID"
                                      and not "FriendlyName"))
                     {
-                        conditions[$"FileAttribute:{attributeId}:{value.Name.LocalName}"] =
+                        conditions[$"FileAttribute[{attributeIndex}].{value.Name.LocalName}"] =
                             value.Value;
                     }
                 }
@@ -426,7 +672,9 @@ public sealed class PolicyRuleGraphEditor
                     actionUsages.Key,
                     attributeIds.Length > 0
                         ? PolicyRuleIdentity.FilePublisher
-                        : PolicyRuleIdentity.Signer,
+                        : signer.Element(ns + "CertPublisher") is not null
+                            ? PolicyRuleIdentity.Publisher
+                            : PolicyRuleIdentity.PcaCertificate,
                     signer.Attribute("Name")?.Value ?? id,
                     GetScenario(actionUsages.Select(usage => usage.ScenarioValue)),
                     conditions,

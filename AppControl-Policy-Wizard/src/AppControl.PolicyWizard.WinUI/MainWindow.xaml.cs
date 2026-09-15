@@ -16,6 +16,8 @@ public sealed partial class MainWindow : Window
     private readonly Brush _selectedCardBorder;
     private readonly PolicyWorkflowService _policyWorkflowService =
         PolicyWorkflowFactory.Create();
+    private readonly ISignerRuleGenerator _signerRuleGenerator =
+        PolicyWorkflowFactory.CreateSignerRuleGenerator();
     private int _currentStep = 1;
     private PolicySourceKind _selectedSourceKind = PolicySourceKind.SignedAndReputable;
     private PolicySourceInfo? _existingPolicy;
@@ -882,11 +884,96 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            IReadOnlyList<PolicyRuleCandidate> candidates =
-                _fileRuleCandidateAnalyzer.Analyze(
+            AddRuleFileButton.IsEnabled = false;
+            AddRuleFileButton.Content = "Analyzing...";
+            IReadOnlyList<PolicyRuleCandidate> baseCandidates =
+                await Task.Run(() => _fileRuleCandidateAnalyzer.Analyze(
                     pickedFile.Path,
                     PolicyRuleAction.Allow,
-                    _policyConfiguration.RuleGraph);
+                    _policyConfiguration.RuleGraph));
+            var candidates = baseCandidates.ToList();
+            PolicyRuleCandidate? signerPlaceholder = candidates.FirstOrDefault(
+                candidate => candidate.Identity == PolicyRuleIdentity.FilePublisher
+                    && !candidate.CanApply);
+            PolicyRuleScenario signerScenario =
+                signerPlaceholder?.Scenario
+                ?? candidates.First(candidate =>
+                    candidate.Identity == PolicyRuleIdentity.Hash).Scenario;
+            if (signerPlaceholder is not null)
+            {
+                candidates.Remove(signerPlaceholder);
+            }
+
+            var signerCandidates = new List<PolicyRuleCandidate>();
+            foreach (SignerRuleLevel level in new[]
+                     {
+                         SignerRuleLevel.FilePublisher,
+                         SignerRuleLevel.Publisher,
+                         SignerRuleLevel.PcaCertificate
+                     })
+            {
+                try
+                {
+                    SignerRuleGenerationResult result =
+                        await _signerRuleGenerator.GenerateAsync(
+                            new SignerRuleGenerationRequest(
+                                pickedFile.Path,
+                                level,
+                                PolicyRuleAction.Allow));
+                    signerCandidates.Add(SignerRuleCandidateFactory.Create(
+                        pickedFile.Path,
+                        signerScenario,
+                        result,
+                        _policyConfiguration.RuleGraph));
+                }
+                catch (Exception exception) when (exception is IOException
+                    or UnauthorizedAccessException
+                    or InvalidDataException
+                    or PolicyBuildException)
+                {
+                    signerCandidates.Add(
+                        SignerRuleCandidateFactory.CreateUnavailable(
+                            pickedFile.Path,
+                            signerScenario,
+                            level,
+                            PolicyRuleAction.Allow,
+                            exception.Message,
+                            isRecommended: false));
+                }
+            }
+
+            int recommendedSigner = signerCandidates.FindIndex(
+                candidate => candidate.CanApply);
+            if (recommendedSigner >= 0)
+            {
+                for (int index = 0; index < candidates.Count; index++)
+                {
+                    candidates[index] = candidates[index] with
+                    {
+                        IsRecommended = false
+                    };
+                }
+
+                signerCandidates[recommendedSigner] =
+                    signerCandidates[recommendedSigner] with
+                    {
+                        IsRecommended = true
+                    };
+            }
+            else if (!candidates.Any(candidate => candidate.IsRecommended))
+            {
+                int fallback = candidates.FindIndex(
+                    candidate => candidate.CanApply);
+                if (fallback >= 0)
+                {
+                    candidates[fallback] = candidates[fallback] with
+                    {
+                        IsRecommended = true
+                    };
+                }
+            }
+
+            candidates.InsertRange(0, signerCandidates);
             _evidencePaths.Add(pickedFile.Path);
             _ruleCandidates.AddRange(candidates);
             RefreshRuleCandidateList();
@@ -905,6 +992,11 @@ public sealed partial class MainWindow : Window
             RuleWorkspaceInfoBar.Title = "The file could not be analyzed";
             RuleWorkspaceInfoBar.Message = exception.Message;
             RuleWorkspaceInfoBar.IsOpen = true;
+        }
+        finally
+        {
+            AddRuleFileButton.IsEnabled = true;
+            AddRuleFileButton.Content = "Add a file";
         }
     }
 

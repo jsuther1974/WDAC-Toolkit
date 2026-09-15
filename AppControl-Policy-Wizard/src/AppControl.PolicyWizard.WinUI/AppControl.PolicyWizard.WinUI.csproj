@@ -43,6 +43,10 @@
       <Link>Scripts\CreateBasePolicy.ps1</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\AppControl.PolicyWizard.Infrastructure.Windows\Scripts\CreateSignerRule.ps1">
+      <Link>Scripts\CreateSignerRule.ps1</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

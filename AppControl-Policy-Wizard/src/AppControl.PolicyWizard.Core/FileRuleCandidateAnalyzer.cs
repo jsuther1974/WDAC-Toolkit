@@ -64,7 +64,7 @@ public sealed class FileRuleCandidateAnalyzer
                 [],
                 canApply: false,
                 unavailableReason:
-                    "Publisher materialization requires the ConfigCI signer-generation stage. Choose a supported alternative for this vertical slice.",
+                    "A ConfigCI signer-generation service must materialize this candidate before it can be selected.",
                 isRecommended: true,
                 existingRules));
         }
