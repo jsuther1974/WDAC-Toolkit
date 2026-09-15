@@ -26,12 +26,18 @@ public sealed partial class MainWindow : Window
     private XDocument? _initialPolicyDocument;
     private IReadOnlyList<PolicySemanticChange> _policyChanges = [];
     private readonly FileRuleCandidateAnalyzer _fileRuleCandidateAnalyzer = new();
+    private readonly FolderEvidenceInventoryScanner _folderInventoryScanner = new();
     private readonly List<PolicyRuleCandidate> _ruleCandidates = [];
     private readonly List<PolicyRuleCandidate> _stagedRuleCandidates = [];
     private readonly HashSet<string> _evidencePaths =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _analyzedFolderPaths =
+        new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<PolicySemanticChange> _ruleChanges = [];
+    private FolderInventoryResult? _folderInventory;
+    private CancellationTokenSource? _folderOperationCancellation;
     private bool _updatingPolicyControls;
+    private const int MaximumFolderAnalysisSelection = 10;
 
     public MainWindow()
     {
@@ -886,136 +892,10 @@ public sealed partial class MainWindow : Window
         {
             AddRuleFileButton.IsEnabled = false;
             AddRuleFileButton.Content = "Analyzing...";
-            IReadOnlyList<PolicyRuleCandidate> baseCandidates =
-                await Task.Run(() => _fileRuleCandidateAnalyzer.Analyze(
+            IReadOnlyList<PolicyRuleCandidate> candidates =
+                await AnalyzeEvidenceFileAsync(
                     pickedFile.Path,
-                    PolicyRuleAction.Allow,
-                    _policyConfiguration.RuleGraph));
-            var candidates = baseCandidates.ToList();
-            PolicyRuleCandidate? signerPlaceholder = candidates.FirstOrDefault(
-                candidate => candidate.Identity == PolicyRuleIdentity.FilePublisher
-                    && !candidate.CanApply);
-            PolicyRuleScenario signerScenario =
-                signerPlaceholder?.Scenario
-                ?? candidates.First(candidate =>
-                    candidate.Identity == PolicyRuleIdentity.Hash).Scenario;
-            if (signerPlaceholder is not null)
-            {
-                candidates.Remove(signerPlaceholder);
-            }
-
-            PolicyRuleGraphSnapshot existingRules =
-                _policyConfiguration.RuleGraph;
-            SignerRuleGenerationRequest[] signerRequests =
-            [
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.FilePublisher,
-                    PolicyRuleAction.Allow,
-                    SignerFileNameLevel.OriginalFileName),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.FilePublisher,
-                    PolicyRuleAction.Allow,
-                    SignerFileNameLevel.InternalName),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.FilePublisher,
-                    PolicyRuleAction.Allow,
-                    SignerFileNameLevel.FileDescription),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.FilePublisher,
-                    PolicyRuleAction.Allow,
-                    SignerFileNameLevel.ProductName),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.FilePublisher,
-                    PolicyRuleAction.Allow,
-                    SignerFileNameLevel.PackageFamilyName),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.FilePublisher,
-                    PolicyRuleAction.Allow,
-                    SignerFileNameLevel.FilePath),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.Publisher,
-                    PolicyRuleAction.Allow),
-                new(
-                    pickedFile.Path,
-                    SignerRuleLevel.PcaCertificate,
-                    PolicyRuleAction.Allow)
-            ];
-            using var generationGate = new SemaphoreSlim(initialCount: 4);
-            Task<PolicyRuleCandidate>[] generationTasks = signerRequests
-                .Select(async request =>
-                {
-                    await generationGate.WaitAsync();
-                    try
-                    {
-                        SignerRuleGenerationResult result =
-                            await _signerRuleGenerator.GenerateAsync(request);
-                        return SignerRuleCandidateFactory.Create(
-                            pickedFile.Path,
-                            signerScenario,
-                            result,
-                            existingRules);
-                    }
-                    catch (Exception exception) when (exception is IOException
-                        or UnauthorizedAccessException
-                        or InvalidDataException
-                        or PolicyBuildException)
-                    {
-                        return SignerRuleCandidateFactory.CreateUnavailable(
-                            pickedFile.Path,
-                            signerScenario,
-                            request.Level,
-                            request.Action,
-                            exception.Message,
-                            isRecommended: false,
-                            request.SpecificFileNameLevel);
-                    }
-                    finally
-                    {
-                        generationGate.Release();
-                    }
-                })
-                .ToArray();
-            var signerCandidates = (await Task.WhenAll(generationTasks)).ToList();
-
-            int recommendedSigner = signerCandidates.FindIndex(
-                candidate => candidate.CanApply);
-            if (recommendedSigner >= 0)
-            {
-                for (int index = 0; index < candidates.Count; index++)
-                {
-                    candidates[index] = candidates[index] with
-                    {
-                        IsRecommended = false
-                    };
-                }
-
-                signerCandidates[recommendedSigner] =
-                    signerCandidates[recommendedSigner] with
-                    {
-                        IsRecommended = true
-                    };
-            }
-            else if (!candidates.Any(candidate => candidate.IsRecommended))
-            {
-                int fallback = candidates.FindIndex(
-                    candidate => candidate.CanApply);
-                if (fallback >= 0)
-                {
-                    candidates[fallback] = candidates[fallback] with
-                    {
-                        IsRecommended = true
-                    };
-                }
-            }
-
-            candidates.InsertRange(0, signerCandidates);
+                    CancellationToken.None);
             _evidencePaths.Add(pickedFile.Path);
             _ruleCandidates.AddRange(candidates);
             RefreshRuleCandidateList();
@@ -1040,6 +920,487 @@ public sealed partial class MainWindow : Window
             AddRuleFileButton.IsEnabled = true;
             AddRuleFileButton.Content = "Add a file";
         }
+    }
+
+    private async Task<IReadOnlyList<PolicyRuleCandidate>> AnalyzeEvidenceFileAsync(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        PolicyConfigurationEditor configuration = _policyConfiguration
+            ?? throw new InvalidOperationException(
+                "Load a policy before analyzing rule evidence.");
+        IReadOnlyList<PolicyRuleCandidate> baseCandidates =
+            await Task.Run(
+                () => _fileRuleCandidateAnalyzer.Analyze(
+                    filePath,
+                    PolicyRuleAction.Allow,
+                    configuration.RuleGraph),
+                cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var candidates = baseCandidates.ToList();
+        PolicyRuleCandidate? signerPlaceholder = candidates.FirstOrDefault(
+            candidate => candidate.Identity == PolicyRuleIdentity.FilePublisher
+                && !candidate.CanApply);
+        PolicyRuleScenario signerScenario =
+            signerPlaceholder?.Scenario
+            ?? candidates.First(candidate =>
+                candidate.Identity == PolicyRuleIdentity.Hash).Scenario;
+        if (signerPlaceholder is not null)
+        {
+            candidates.Remove(signerPlaceholder);
+        }
+
+        PolicyRuleGraphSnapshot existingRules = configuration.RuleGraph;
+        SignerRuleGenerationRequest[] signerRequests =
+        [
+            new(
+                filePath,
+                SignerRuleLevel.FilePublisher,
+                PolicyRuleAction.Allow,
+                SignerFileNameLevel.OriginalFileName),
+            new(
+                filePath,
+                SignerRuleLevel.FilePublisher,
+                PolicyRuleAction.Allow,
+                SignerFileNameLevel.InternalName),
+            new(
+                filePath,
+                SignerRuleLevel.FilePublisher,
+                PolicyRuleAction.Allow,
+                SignerFileNameLevel.FileDescription),
+            new(
+                filePath,
+                SignerRuleLevel.FilePublisher,
+                PolicyRuleAction.Allow,
+                SignerFileNameLevel.ProductName),
+            new(
+                filePath,
+                SignerRuleLevel.FilePublisher,
+                PolicyRuleAction.Allow,
+                SignerFileNameLevel.PackageFamilyName),
+            new(
+                filePath,
+                SignerRuleLevel.FilePublisher,
+                PolicyRuleAction.Allow,
+                SignerFileNameLevel.FilePath),
+            new(
+                filePath,
+                SignerRuleLevel.Publisher,
+                PolicyRuleAction.Allow),
+            new(
+                filePath,
+                SignerRuleLevel.PcaCertificate,
+                PolicyRuleAction.Allow)
+        ];
+        using var generationGate = new SemaphoreSlim(initialCount: 4);
+        Task<PolicyRuleCandidate>[] generationTasks = signerRequests
+            .Select(async request =>
+            {
+                await generationGate.WaitAsync(cancellationToken);
+                try
+                {
+                    SignerRuleGenerationResult result =
+                        await _signerRuleGenerator.GenerateAsync(
+                            request,
+                            cancellationToken);
+                    return SignerRuleCandidateFactory.Create(
+                        filePath,
+                        signerScenario,
+                        result,
+                        existingRules);
+                }
+                catch (Exception exception) when (exception is IOException
+                    or UnauthorizedAccessException
+                    or InvalidDataException
+                    or PolicyBuildException)
+                {
+                    return SignerRuleCandidateFactory.CreateUnavailable(
+                        filePath,
+                        signerScenario,
+                        request.Level,
+                        request.Action,
+                        exception.Message,
+                        isRecommended: false,
+                        request.SpecificFileNameLevel);
+                }
+                finally
+                {
+                    generationGate.Release();
+                }
+            })
+            .ToArray();
+        var signerCandidates = (await Task.WhenAll(generationTasks)).ToList();
+
+        int recommendedSigner = signerCandidates.FindIndex(
+            candidate => candidate.CanApply);
+        if (recommendedSigner >= 0)
+        {
+            for (int index = 0; index < candidates.Count; index++)
+            {
+                candidates[index] = candidates[index] with
+                {
+                    IsRecommended = false
+                };
+            }
+
+            signerCandidates[recommendedSigner] =
+                signerCandidates[recommendedSigner] with
+                {
+                    IsRecommended = true
+                };
+        }
+        else if (!candidates.Any(candidate => candidate.IsRecommended))
+        {
+            int fallback = candidates.FindIndex(
+                candidate => candidate.CanApply);
+            if (fallback >= 0)
+            {
+                candidates[fallback] = candidates[fallback] with
+                {
+                    IsRecommended = true
+                };
+            }
+        }
+
+        candidates.InsertRange(0, signerCandidates);
+        return candidates;
+    }
+
+    private async void AddRuleFolderButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (_policyConfiguration is null)
+        {
+            return;
+        }
+
+        var picker = new FolderPicker(AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.ComputerFolder,
+            CommitButtonText = "Inventory folder",
+            ViewMode = PickerViewMode.List
+        };
+        var pickedFolder = await picker.PickSingleFolderAsync();
+        if (pickedFolder is null)
+        {
+            return;
+        }
+
+        _folderOperationCancellation?.Cancel();
+        _folderOperationCancellation?.Dispose();
+        _folderOperationCancellation = new CancellationTokenSource();
+        FolderInventoryPanel.Visibility = Visibility.Visible;
+        SetFolderOperationState(
+            active: true,
+            $"Inventorying {pickedFolder.Path}...");
+        try
+        {
+            _folderInventory = await _folderInventoryScanner.ScanAsync(
+                pickedFolder.Path,
+                cancellationToken: _folderOperationCancellation.Token);
+            PopulateFolderInventory(_folderInventory);
+        }
+        catch (OperationCanceledException)
+        {
+            FolderInventoryStatus.Text = "Folder inventory canceled.";
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or DirectoryNotFoundException)
+        {
+            RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Error;
+            RuleWorkspaceInfoBar.Title = "The folder could not be inventoried";
+            RuleWorkspaceInfoBar.Message = exception.Message;
+            RuleWorkspaceInfoBar.IsOpen = true;
+            FolderInventoryPanel.Visibility = Visibility.Collapsed;
+        }
+        finally
+        {
+            SetFolderOperationState(active: false);
+        }
+    }
+
+    private void PopulateFolderInventory(FolderInventoryResult inventory)
+    {
+        _analyzedFolderPaths.Clear();
+        FolderInventoryList.Items.Clear();
+        foreach (FolderInventoryItem item in inventory.Items)
+        {
+            string metadata = item.ProductName
+                ?? item.FileDescription
+                ?? item.OriginalFileName
+                ?? item.Kind.ToString();
+            FolderInventoryList.Items.Add(
+                $"{item.RelativePath}{Environment.NewLine}"
+                + $"{Humanize(item.Kind)} • {metadata} • {FormatFileSize(item.Length)}");
+        }
+
+        string limit = inventory.WasTruncated
+            ? $" Inventory stopped at {inventory.Items.Count} supported files."
+            : string.Empty;
+        string skipped = inventory.UnsupportedFileCount > 0
+            || inventory.UnreadableFileCount > 0
+                ? $" {inventory.UnsupportedFileCount} unsupported and "
+                    + $"{inventory.UnreadableFileCount} unreadable files were skipped."
+                : string.Empty;
+        FolderInventoryStatus.Text =
+            $"{inventory.Items.Count} supported file(s) found under "
+            + $"{inventory.RootPath}.{limit}{skipped}";
+        FolderInventoryList.SelectedItems.Clear();
+        UpdateFolderSelectionState();
+    }
+
+    private void FolderInventoryList_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        UpdateFolderSelectionState();
+    }
+
+    private void SelectFolderBatchButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        var selectedItems = FolderInventoryList.SelectedItems
+            .Cast<object>()
+            .ToHashSet();
+        object[] nextBatch = FolderInventoryList.Items
+            .Cast<object>()
+            .Where(item => !selectedItems.Contains(item))
+            .Take(MaximumFolderAnalysisSelection)
+            .ToArray();
+        foreach (object item in nextBatch)
+        {
+            FolderInventoryList.SelectedItems.Add(item);
+        }
+
+        UpdateFolderSelectionState();
+    }
+
+    private void SelectAllFolderItemsCheckBox_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (FolderInventoryList.SelectedItems.Count
+            < FolderInventoryList.Items.Count)
+        {
+            FolderInventoryList.SelectAll();
+        }
+        else
+        {
+            FolderInventoryList.SelectedItems.Clear();
+        }
+
+        UpdateFolderSelectionState();
+    }
+
+    private async void AnalyzeFolderSelectionButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (_folderInventory is null || _policyConfiguration is null)
+        {
+            return;
+        }
+
+        FolderInventoryResult inventory = _folderInventory;
+        int[] selectedIndices = FolderInventoryList.SelectedItems
+            .Cast<object>()
+            .Select(item => FolderInventoryList.Items.IndexOf(item))
+            .Where(index => index >= 0)
+            .Order()
+            .ToArray();
+        if (selectedIndices.Length == 0)
+        {
+            return;
+        }
+
+        int[] pendingIndices = selectedIndices
+            .Where(index => !_analyzedFolderPaths.Contains(
+                inventory.Items[index].Path))
+            .ToArray();
+        if (pendingIndices.Length == 0)
+        {
+            RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Informational;
+            RuleWorkspaceInfoBar.Title = "Selected files already analyzed";
+            RuleWorkspaceInfoBar.Message =
+                "Select additional inventory files to generate more candidates.";
+            RuleWorkspaceInfoBar.IsOpen = true;
+            return;
+        }
+
+        _folderOperationCancellation?.Cancel();
+        _folderOperationCancellation?.Dispose();
+        _folderOperationCancellation = new CancellationTokenSource();
+        SetFolderOperationState(active: true);
+        try
+        {
+            int batchCount = (int)Math.Ceiling(
+                pendingIndices.Length
+                / (double)MaximumFolderAnalysisSelection);
+            for (int position = 0; position < pendingIndices.Length; position++)
+            {
+                int batchNumber =
+                    position / MaximumFolderAnalysisSelection + 1;
+                FolderInventoryItem item =
+                    inventory.Items[pendingIndices[position]];
+                FolderInventoryStatus.Text =
+                    $"Batch {batchNumber} of {batchCount} • "
+                    + $"file {position + 1} of {pendingIndices.Length}: "
+                    + item.RelativePath;
+                IReadOnlyList<PolicyRuleCandidate> candidates =
+                    await AnalyzeEvidenceFileAsync(
+                        item.Path,
+                        _folderOperationCancellation.Token);
+                foreach (PolicyRuleCandidate candidate in candidates)
+                {
+                    FolderRuleCandidateClusterer.AddOrMerge(
+                        _ruleCandidates,
+                        candidate);
+                }
+
+                _evidencePaths.Add(item.Path);
+                _analyzedFolderPaths.Add(item.Path);
+                UpdateFolderSelectionState();
+            }
+
+            RefreshRuleCandidateList();
+            int recommendedIndex = _ruleCandidates.FindIndex(
+                candidate => candidate.IsRecommended
+                    && candidate.EvidencePaths.Any(path =>
+                        selectedIndices.Any(index =>
+                            string.Equals(
+                                inventory.Items[index].Path,
+                                path,
+                                StringComparison.OrdinalIgnoreCase))));
+            if (recommendedIndex >= 0)
+            {
+                RuleCandidateList.SelectedIndex = recommendedIndex;
+            }
+
+            FolderInventoryStatus.Text =
+                $"Analyzed {pendingIndices.Length} selected file(s). "
+                + "Equivalent identities were grouped with their supporting evidence.";
+        }
+        catch (OperationCanceledException)
+        {
+            FolderInventoryStatus.Text = "Folder analysis canceled.";
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            FolderInventoryStatus.Text =
+                "Folder analysis stopped before all selected files were processed.";
+            RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Error;
+            RuleWorkspaceInfoBar.Title = "A selected file could not be analyzed";
+            RuleWorkspaceInfoBar.Message = exception.Message;
+            RuleWorkspaceInfoBar.IsOpen = true;
+        }
+        finally
+        {
+            SetFolderOperationState(active: false);
+        }
+    }
+
+    private void CancelFolderAnalysisButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _folderOperationCancellation?.Cancel();
+    }
+
+    private void CloseFolderInventoryButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _folderOperationCancellation?.Cancel();
+        _folderInventory = null;
+        _analyzedFolderPaths.Clear();
+        FolderInventoryList.Items.Clear();
+        UpdateFolderSelectionState();
+        FolderInventoryPanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void SetFolderOperationState(bool active, string? status = null)
+    {
+        if (status is not null)
+        {
+            FolderInventoryStatus.Text = status;
+        }
+
+        FolderInventoryProgress.IsActive = active;
+        FolderInventoryProgress.Visibility =
+            active ? Visibility.Visible : Visibility.Collapsed;
+        CancelFolderAnalysisButton.Visibility =
+            active ? Visibility.Visible : Visibility.Collapsed;
+        AddRuleFileButton.IsEnabled = !active;
+        AddRuleFolderButton.IsEnabled = !active;
+        if (!active)
+        {
+            _folderOperationCancellation?.Dispose();
+            _folderOperationCancellation = null;
+        }
+
+        UpdateFolderSelectionState();
+    }
+
+    private void UpdateFolderSelectionState()
+    {
+        int totalCount = FolderInventoryList.Items.Count;
+        int selectedCount = FolderInventoryList.SelectedItems.Count;
+        int analyzedCount = _folderInventory is null
+            ? 0
+            : _folderInventory.Items.Count(item =>
+                _analyzedFolderPaths.Contains(item.Path));
+        int pendingSelectedCount = _folderInventory is null
+            ? 0
+            : FolderInventoryList.SelectedItems
+                .Cast<object>()
+                .Select(item => FolderInventoryList.Items.IndexOf(item))
+                .Where(index => index >= 0)
+                .Count(index => !_analyzedFolderPaths.Contains(
+                    _folderInventory.Items[index].Path));
+        bool active = _folderOperationCancellation is not null;
+
+        FolderSelectionSummary.Text =
+            $"{selectedCount} of {totalCount} selected"
+            + (analyzedCount > 0 ? $" • {analyzedCount} analyzed" : string.Empty);
+        SelectAllFolderItemsCheckBox.IsChecked = totalCount > 0
+            && selectedCount == totalCount
+                ? true
+                : selectedCount == 0
+                    ? false
+                    : null;
+        SelectAllFolderItemsCheckBox.IsEnabled = !active && totalCount > 0;
+        SelectFolderBatchButton.Content = selectedCount == 0
+            ? "Select first batch"
+            : selectedCount < totalCount
+                ? "Select next batch"
+                : "All files selected";
+        SelectFolderBatchButton.IsEnabled =
+            !active && selectedCount < totalCount;
+        AnalyzeFolderSelectionButton.Content = pendingSelectedCount > 0
+            ? $"Analyze {pendingSelectedCount} selected"
+            : selectedCount > 0
+                ? "Selected files analyzed"
+                : "Analyze selected files";
+        AnalyzeFolderSelectionButton.IsEnabled =
+            !active && pendingSelectedCount > 0;
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes >= 1024L * 1024L)
+        {
+            return $"{bytes / (1024d * 1024d):0.0} MB";
+        }
+
+        return bytes >= 1024L
+            ? $"{bytes / 1024d:0.0} KB"
+            : $"{bytes} bytes";
     }
 
     private void ManualRuleButton_Click(object sender, RoutedEventArgs e)
@@ -1106,7 +1467,10 @@ public sealed partial class MainWindow : Window
 
         PolicyRuleCandidate candidate = _ruleCandidates[index];
         RuleCandidateTitle.Text = candidate.Title;
-        RuleCandidateEffect.Text = candidate.Effect;
+        RuleCandidateEffect.Text = candidate.EvidencePaths.Count > 1
+            ? $"{candidate.Effect}{Environment.NewLine}"
+                + $"Supported by {candidate.EvidencePaths.Count} inventoried files."
+            : candidate.Effect;
         RuleTrustBreadthText.Text = Humanize(candidate.TrustBreadth);
         RuleUpdateResilienceText.Text = Humanize(candidate.UpdateResilience);
         RuleEvidenceQualityText.Text = Humanize(candidate.EvidenceQuality);
@@ -1183,6 +1547,10 @@ public sealed partial class MainWindow : Window
             {
                 labels.Add("Selected");
             }
+            if (candidate.EvidencePaths.Count > 1)
+            {
+                labels.Add($"{candidate.EvidencePaths.Count} files");
+            }
             if (!candidate.CanApply)
             {
                 labels.Add("Unavailable for this evidence");
@@ -1229,6 +1597,11 @@ public sealed partial class MainWindow : Window
 
     private void ResetRuleWorkspace()
     {
+        _folderOperationCancellation?.Cancel();
+        _folderOperationCancellation?.Dispose();
+        _folderOperationCancellation = null;
+        _folderInventory = null;
+        _analyzedFolderPaths.Clear();
         _ruleCandidates.Clear();
         _stagedRuleCandidates.Clear();
         _evidencePaths.Clear();
@@ -1236,6 +1609,11 @@ public sealed partial class MainWindow : Window
         if (RuleCandidateList is not null)
         {
             RuleCandidateList.Items.Clear();
+        }
+        if (FolderInventoryList is not null)
+        {
+            FolderInventoryList.Items.Clear();
+            FolderInventoryPanel.Visibility = Visibility.Collapsed;
         }
     }
 

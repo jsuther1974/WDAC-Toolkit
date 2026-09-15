@@ -82,7 +82,7 @@
       "priority": "P0",
       "migrationStatus": "characterized",
       "decisionStatus": "accepted",
-      "targetDirection": "Use a source-driven candidate workspace with separate allow and deny policy intent, ranked rule identities, derived application/driver targeting, inventory-first folder analysis, semantic event clustering, nested signer exceptions, PFN-first packaged-app trust, specialized COM authorization, and a separate AppID tagging policy workflow. The production slice now implements a lossless rule graph, file and manual evidence, and real ConfigCI-backed PCA certificate, Publisher, and FilePublisher additions across OriginalFileName, InternalName, FileDescription, ProductName, PackageFamilyName, and FilePath selectors, plus file-attribute, path, and hash additions. Editing/removal, folders, events, packaged apps, exceptions, and COM remain to be migrated.",
+      "targetDirection": "Use a source-driven candidate workspace with separate allow and deny policy intent, ranked rule identities, derived application/driver targeting, inventory-first folder analysis, semantic event clustering, nested signer exceptions, PFN-first packaged-app trust, specialized COM authorization, and a separate AppID tagging policy workflow. The production slice now implements a lossless rule graph; file, manual, and recursive folder evidence; bounded folder batches with cancellation; equivalent-rule clustering with retained provenance; and real ConfigCI-backed PCA certificate, Publisher, and FilePublisher additions across OriginalFileName, InternalName, FileDescription, ProductName, PackageFamilyName, and FilePath selectors, plus file-attribute, path, and hash additions. Editing/removal, events, installed packages, exceptions, and COM remain to be migrated.",
       "legacyLocation": "WDAC-Policy-Wizard/app/src/CustomRules.cs",
       "successorEvidence": [
         "AppControl.PolicyWizard.Core rule graph and file evidence candidate analyzer",
@@ -90,6 +90,8 @@
         "Complete SpecificFileNameLevel candidate spectrum with strict fallback detection",
         "Multi-EKU and CertOemID/OPUS preservation and parity coverage",
         "Collision-safe signer fragment remapping and scenario merge",
+        "Recursive folder inventory with supported-file filtering and bounded analysis batches",
+        "Folder candidate clustering with retained supporting-file provenance",
         "Adaptive WinUI Application rules workspace",
         "AppControl.PolicyWizard.Core.Tests PolicyRuleGraphEditorTests",
         "AppControl.PolicyWizard.Parity.Tests ApplicationRuleParityTests"

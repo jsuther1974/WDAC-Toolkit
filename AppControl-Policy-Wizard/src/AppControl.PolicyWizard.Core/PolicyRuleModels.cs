@@ -93,7 +93,12 @@ public sealed record PolicyRuleCandidate(
     string? UnavailableReason = null,
     bool IsRecommended = false,
     bool IsAlreadyCovered = false,
-    PolicyRuleFragment? Fragment = null);
+    PolicyRuleFragment? Fragment = null,
+    IReadOnlyList<string>? SupportingEvidencePaths = null)
+{
+    public IReadOnlyList<string> EvidencePaths =>
+        SupportingEvidencePaths ?? [EvidencePath];
+}
 
 public sealed record PolicyRuleAddition(PolicyRuleCandidate Candidate);
 

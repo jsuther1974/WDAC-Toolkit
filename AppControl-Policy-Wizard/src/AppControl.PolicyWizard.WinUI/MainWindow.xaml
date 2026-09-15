@@ -628,6 +628,10 @@
                                                         Content="Add a file"
                                                         Click="AddRuleFileButton_Click" />
                                                     <Button
+                                                        x:Name="AddRuleFolderButton"
+                                                        Content="Add a folder"
+                                                        Click="AddRuleFolderButton_Click" />
+                                                    <Button
                                                         Content="Advanced manual entry"
                                                         Click="ManualRuleButton_Click" />
                                                 </StackPanel>
@@ -647,9 +651,79 @@
                                                 Grid.Column="2"
                                                 VerticalAlignment="Center"
                                                 Style="{StaticResource SecondaryTextStyle}"
-                                                Text="Folders, events, installed packages, and COM authorization follow in later slices."
+                                                Text="Events, installed packages, and COM authorization follow in later slices."
                                                 TextWrapping="Wrap" />
                                         </Grid>
+                                    </Border>
+
+                                    <Border
+                                        x:Name="FolderInventoryPanel"
+                                        Style="{StaticResource CardStyle}"
+                                        Visibility="Collapsed">
+                                        <StackPanel Spacing="10">
+                                            <Grid ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Folder inventory" />
+                                                    <TextBlock
+                                                        x:Name="FolderInventoryStatus"
+                                                        Style="{StaticResource SecondaryTextStyle}"
+                                                        Text="Select files to analyze as rule evidence."
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
+                                                <ProgressRing
+                                                    x:Name="FolderInventoryProgress"
+                                                    Grid.Column="1"
+                                                    Width="24"
+                                                    Height="24"
+                                                    IsActive="False"
+                                                    Visibility="Collapsed" />
+                                            </Grid>
+                                            <Grid ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox
+                                                    x:Name="SelectAllFolderItemsCheckBox"
+                                                    Content="Select all"
+                                                    IsThreeState="True"
+                                                    Click="SelectAllFolderItemsCheckBox_Click" />
+                                                <TextBlock
+                                                    x:Name="FolderSelectionSummary"
+                                                    Grid.Column="1"
+                                                    HorizontalAlignment="Right"
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="0 of 0 selected" />
+                                            </Grid>
+                                            <ListView
+                                                x:Name="FolderInventoryList"
+                                                Height="160"
+                                                SelectionMode="Multiple"
+                                                SelectionChanged="FolderInventoryList_SelectionChanged" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Button
+                                                    x:Name="AnalyzeFolderSelectionButton"
+                                                    Content="Analyze selected files"
+                                                    IsEnabled="False"
+                                                    Click="AnalyzeFolderSelectionButton_Click" />
+                                                <Button
+                                                    x:Name="SelectFolderBatchButton"
+                                                    Content="Select first batch"
+                                                    Click="SelectFolderBatchButton_Click" />
+                                                <Button
+                                                    x:Name="CancelFolderAnalysisButton"
+                                                    Content="Cancel"
+                                                    Visibility="Collapsed"
+                                                    Click="CancelFolderAnalysisButton_Click" />
+                                                <Button
+                                                    Content="Close inventory"
+                                                    Click="CloseFolderInventoryButton_Click" />
+                                            </StackPanel>
+                                        </StackPanel>
                                     </Border>
 
                                     <Border Style="{StaticResource CardStyle}">
