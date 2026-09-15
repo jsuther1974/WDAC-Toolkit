@@ -62,13 +62,18 @@
                     IsEnabled="False"
                     SelectsOnInvoked="False" />
                 <NavigationViewItem
+                    x:Name="RulesStepNavigationItem"
+                    Content="3  Application rules"
+                    IsEnabled="False"
+                    SelectsOnInvoked="False" />
+                <NavigationViewItem
                     x:Name="SettingsStepNavigationItem"
-                    Content="3  Choose output"
+                    Content="4  Choose output"
                     IsEnabled="False"
                     SelectsOnInvoked="False" />
                 <NavigationViewItem
                     x:Name="ReviewStepNavigationItem"
-                    Content="4  Review"
+                    Content="5  Review"
                     IsEnabled="False"
                     SelectsOnInvoked="False" />
             </NavigationView.MenuItems>
@@ -291,7 +296,7 @@
                                     IsClosable="False"
                                     Severity="Informational"
                                     Title="One policy workflow"
-                                    Message="Templates create a new policy identity. Existing policies preserve their identity. Event-derived rules are not included yet." />
+                                    Message="Templates create a new policy identity. Existing policies preserve their identity. Application rules are reviewed in the same workflow." />
                             </StackPanel>
                         </Grid>
 
@@ -590,6 +595,187 @@
                             </StackPanel>
                         </Grid>
 
+                        <Grid x:Name="RulesPage" Visibility="Collapsed">
+                            <StackPanel Spacing="20">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Style="{StaticResource PageTitleStyle}" Text="Choose application rules" />
+                                    <TextBlock
+                                        Style="{StaticResource SecondaryTextStyle}"
+                                        Text="Add evidence, review ranked identities, and stage only the rules you intend to add. Existing policy content remains preserved." />
+                                </StackPanel>
+
+                                <InfoBar
+                                    x:Name="RuleIntentInfoBar"
+                                    IsOpen="True"
+                                    IsClosable="False"
+                                    Severity="Informational"
+                                    Title="Allow applications"
+                                    Message="This policy workflow adds allow rules. Deny authoring will use a separate policy workflow." />
+
+                                <StackPanel Spacing="12">
+                                    <Border Style="{StaticResource CardStyle}">
+                                        <Grid ColumnSpacing="20">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="10">
+                                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Evidence sources" />
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <Button
+                                                        Content="Add a file"
+                                                        Click="AddRuleFileButton_Click" />
+                                                    <Button
+                                                        Content="Advanced manual entry"
+                                                        Click="ManualRuleButton_Click" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Spacing="3">
+                                                <TextBlock FontWeight="SemiBold" Text="Workspace summary" />
+                                                <TextBlock
+                                                    x:Name="ExistingRulesSummary"
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="No existing logical rules detected." />
+                                                <TextBlock
+                                                    x:Name="EvidenceSummary"
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="No evidence added." />
+                                            </StackPanel>
+                                            <TextBlock
+                                                Grid.Column="2"
+                                                VerticalAlignment="Center"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Folders, events, installed packages, and COM authorization follow in later slices."
+                                                TextWrapping="Wrap" />
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Style="{StaticResource CardStyle}">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Spacing="4">
+                                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Rule candidates" />
+                                                <TextBlock
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="Recommendations are ordered from update-friendly identities to exact-file fallbacks." />
+                                            </StackPanel>
+                                            <ListView
+                                                x:Name="RuleCandidateList"
+                                                Grid.Row="1"
+                                                Margin="0,12,0,12"
+                                                Height="120"
+                                                SelectionChanged="RuleCandidateList_SelectionChanged" />
+                                            <InfoBar
+                                                x:Name="RuleWorkspaceInfoBar"
+                                                Grid.Row="2"
+                                                IsOpen="False"
+                                                IsClosable="True"
+                                                Severity="Informational" />
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Style="{StaticResource CardStyle}">
+                                        <Grid ColumnSpacing="20">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="1.35*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="1.15*" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="10">
+                                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Candidate details" />
+                                                <TextBlock
+                                                    x:Name="RuleCandidateTitle"
+                                                    FontWeight="SemiBold"
+                                                    Text="Select a candidate" />
+                                                <TextBlock
+                                                    x:Name="RuleCandidateEffect"
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="Add a file or create a manual candidate to inspect its effect."
+                                                    TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Spacing="10">
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock FontWeight="SemiBold" Text="Trust breadth" />
+                                                    <TextBlock x:Name="RuleTrustBreadthText" Style="{StaticResource SecondaryTextStyle}" Text="Not evaluated" />
+                                                </StackPanel>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock FontWeight="SemiBold" Text="Update resilience" />
+                                                    <TextBlock x:Name="RuleUpdateResilienceText" Style="{StaticResource SecondaryTextStyle}" Text="Not evaluated" />
+                                                </StackPanel>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock FontWeight="SemiBold" Text="Evidence quality" />
+                                                    <TextBlock x:Name="RuleEvidenceQualityText" Style="{StaticResource SecondaryTextStyle}" Text="Not evaluated" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Spacing="10">
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock FontWeight="SemiBold" Text="Concerns" />
+                                                    <TextBlock
+                                                        x:Name="RuleConcernsText"
+                                                        Style="{StaticResource SecondaryTextStyle}"
+                                                        Text="No candidate selected."
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
+                                                <Button
+                                                    x:Name="UseRuleCandidateButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    Content="Use this rule"
+                                                    IsEnabled="False"
+                                                    Style="{StaticResource AccentButtonStyle}"
+                                                    Click="UseRuleCandidateButton_Click" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+
+                                <Border
+                                    x:Name="ManualRulePanel"
+                                    Style="{StaticResource CardStyle}"
+                                    Visibility="Collapsed">
+                                    <StackPanel Spacing="14">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="ManualRuleIdentityComboBox" Header="Identity" SelectedIndex="0">
+                                                <ComboBoxItem Content="File name and optional minimum version" Tag="FileName" />
+                                                <ComboBoxItem Content="File path" Tag="FilePath" />
+                                                <ComboBoxItem Content="SHA-1 or SHA-256 hash" Tag="Hash" />
+                                            </ComboBox>
+                                            <ComboBox x:Name="ManualRuleScenarioComboBox" Grid.Column="1" Header="Target" SelectedIndex="0">
+                                                <ComboBoxItem Content="Applications" Tag="Applications" />
+                                                <ComboBoxItem Content="Drivers" Tag="Drivers" />
+                                                <ComboBoxItem Content="Applications and drivers" Tag="ApplicationsAndDrivers" />
+                                            </ComboBox>
+                                            <TextBox
+                                                x:Name="ManualRuleVersionTextBox"
+                                                Grid.Column="2"
+                                                Header="Minimum version (optional)"
+                                                PlaceholderText="1.0.0.0" />
+                                        </Grid>
+                                        <TextBox
+                                            x:Name="ManualRuleValueTextBox"
+                                            Header="Rule value"
+                                            PlaceholderText="Example.exe, C:\Program Files\Example\Example.exe, or a hexadecimal hash" />
+                                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                                            <Button Content="Cancel" Click="CancelManualRuleButton_Click" />
+                                            <Button
+                                                Content="Analyze manual rule"
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                Click="AnalyzeManualRuleButton_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+
                         <Grid x:Name="SettingsPage" Visibility="Collapsed">
                             <StackPanel Spacing="20">
                                 <StackPanel Spacing="8">
@@ -702,6 +888,16 @@
 
                                         <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
+                                        <StackPanel Spacing="4">
+                                            <TextBlock FontWeight="SemiBold" Text="Application rules" />
+                                            <TextBlock
+                                                x:Name="ReviewRules"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="No application rule changes." />
+                                        </StackPanel>
+
+                                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
                                         <Grid ColumnSpacing="24" RowSpacing="18">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
@@ -775,10 +971,10 @@
                                 x:Name="ProgressText"
                                 FontSize="12"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="Step 1 of 4" />
+                                Text="Step 1 of 5" />
                             <ProgressBar
                                 x:Name="WorkflowProgress"
-                                Maximum="4"
+                                Maximum="5"
                                 Minimum="0"
                                 Value="1" />
                         </StackPanel>

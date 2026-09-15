@@ -80,11 +80,16 @@
       "area": "Rules",
       "name": "Create and edit custom rules",
       "priority": "P0",
-      "migrationStatus": "legacy-only",
-      "decisionStatus": "pending-review",
-      "targetDirection": "Use one rule-creation workflow with files, folders, publishers, hashes, and event data as rule sources.",
+      "migrationStatus": "characterized",
+      "decisionStatus": "accepted",
+      "targetDirection": "Use a source-driven candidate workspace with separate allow and deny policy intent, ranked rule identities, derived application/driver targeting, inventory-first folder analysis, semantic event clustering, nested signer exceptions, PFN-first packaged-app trust, specialized COM authorization, and a separate AppID tagging policy workflow. The first production vertical slice implements a lossless rule graph plus file and manual evidence for file-attribute, path, and hash additions; publisher generation, editing/removal, folders, events, packaged apps, exceptions, and COM remain to be migrated.",
       "legacyLocation": "WDAC-Policy-Wizard/app/src/CustomRules.cs",
-      "successorEvidence": []
+      "successorEvidence": [
+        "AppControl.PolicyWizard.Core rule graph and file evidence candidate analyzer",
+        "Adaptive WinUI Application rules workspace",
+        "AppControl.PolicyWizard.Core.Tests PolicyRuleGraphEditorTests",
+        "AppControl.PolicyWizard.Parity.Tests ApplicationRuleParityTests"
+      ]
     },
     {
       "id": "binary-policy-import",
@@ -125,8 +130,8 @@
       "name": "Create rules from event data",
       "priority": "P2",
       "migrationStatus": "deferred",
-      "decisionStatus": "pending-review",
-      "targetDirection": "Reintegrate event-derived rules as a source within rule creation rather than as a top-level flow.",
+      "decisionStatus": "accepted",
+      "targetDirection": "Reintegrate local logs, EVTX, Advanced Hunting CSV, and Log Analytics CSV as evidence sources in Application rules. Normalize and semantically cluster observations before review, retain provenance, and never infer allow or deny intent from the event type.",
       "legacyLocation": "WDAC-Policy-Wizard/app/src",
       "successorEvidence": []
     },

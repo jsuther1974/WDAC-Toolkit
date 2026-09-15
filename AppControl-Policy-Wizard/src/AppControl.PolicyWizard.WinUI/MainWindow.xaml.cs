@@ -23,6 +23,12 @@ public sealed partial class MainWindow : Window
     private PolicyConfigurationSnapshot? _initialPolicyConfiguration;
     private XDocument? _initialPolicyDocument;
     private IReadOnlyList<PolicySemanticChange> _policyChanges = [];
+    private readonly FileRuleCandidateAnalyzer _fileRuleCandidateAnalyzer = new();
+    private readonly List<PolicyRuleCandidate> _ruleCandidates = [];
+    private readonly List<PolicyRuleCandidate> _stagedRuleCandidates = [];
+    private readonly HashSet<string> _evidencePaths =
+        new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<PolicySemanticChange> _ruleChanges = [];
     private bool _updatingPolicyControls;
 
     public MainWindow()
@@ -287,7 +293,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_currentStep == 3 && string.IsNullOrWhiteSpace(PolicyNameTextBox.Text))
+        if (_currentStep == 3)
+        {
+            ApplyStagedApplicationRules();
+            _currentStep++;
+            UpdateStep();
+            return;
+        }
+
+        if (_currentStep == 4 && string.IsNullOrWhiteSpace(PolicyNameTextBox.Text))
         {
             ValidationInfoBar.Severity = InfoBarSeverity.Warning;
             ValidationInfoBar.Title = "Enter an output file name";
@@ -297,7 +311,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_currentStep < 4)
+        if (_currentStep < 5)
         {
             _currentStep++;
             UpdateStep();
@@ -416,23 +430,31 @@ public sealed partial class MainWindow : Window
     {
         TemplatePage.Visibility = _currentStep == 1 ? Visibility.Visible : Visibility.Collapsed;
         BehaviorPage.Visibility = _currentStep == 2 ? Visibility.Visible : Visibility.Collapsed;
-        SettingsPage.Visibility = _currentStep == 3 ? Visibility.Visible : Visibility.Collapsed;
-        ReviewPage.Visibility = _currentStep == 4 ? Visibility.Visible : Visibility.Collapsed;
+        RulesPage.Visibility = _currentStep == 3 ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPage.Visibility = _currentStep == 4 ? Visibility.Visible : Visibility.Collapsed;
+        ReviewPage.Visibility = _currentStep == 5 ? Visibility.Visible : Visibility.Collapsed;
 
         BackButton.IsEnabled = _currentStep > 1;
-        NextButton.Content = _currentStep == 4 ? "Create policy" : "Next";
-        ProgressText.Text = $"Step {_currentStep} of 4";
+        NextButton.Content = _currentStep == 5 ? "Create policy" : "Next";
+        ProgressText.Text = $"Step {_currentStep} of 5";
         WorkflowProgress.Value = _currentStep;
 
         TemplateStepNavigationItem.Content = $"{(_currentStep > 1 ? "✓" : "1")}  Choose source";
         BehaviorStepNavigationItem.Content = $"{(_currentStep > 2 ? "✓" : "2")}  Policy behavior";
-        SettingsStepNavigationItem.Content = $"{(_currentStep > 3 ? "✓" : "3")}  Choose output";
-        ReviewStepNavigationItem.Content = "4  Review";
+        RulesStepNavigationItem.Content = $"{(_currentStep > 3 ? "✓" : "3")}  Application rules";
+        SettingsStepNavigationItem.Content = $"{(_currentStep > 4 ? "✓" : "4")}  Choose output";
+        ReviewStepNavigationItem.Content = "5  Review";
         BehaviorStepNavigationItem.IsEnabled = _currentStep >= 2;
-        SettingsStepNavigationItem.IsEnabled = _currentStep >= 3;
-        ReviewStepNavigationItem.IsEnabled = _currentStep >= 4;
+        RulesStepNavigationItem.IsEnabled = _currentStep >= 3;
+        SettingsStepNavigationItem.IsEnabled = _currentStep >= 4;
+        ReviewStepNavigationItem.IsEnabled = _currentStep >= 5;
 
-        if (_currentStep == 4)
+        if (_currentStep == 3)
+        {
+            PopulateRuleWorkspace();
+        }
+
+        if (_currentStep == 5)
         {
             PopulateReview();
         }
@@ -467,9 +489,14 @@ public sealed partial class MainWindow : Window
                 Environment.NewLine,
                 _policyChanges.Select(change =>
                     $"{change.Name}: {change.Before} → {change.After}"));
+        ReviewRules.Text = _ruleChanges.Count == 0
+            ? "No application rule changes. Existing rules remain preserved."
+            : string.Join(
+                Environment.NewLine,
+                _ruleChanges.Select(change => change.After));
         ReviewMode.Text = existingPolicy
-            ? $"Identity preserved; version {_existingPolicy!.Version} → {_existingPolicy.NextVersion}; {_policyChanges.Count} behavior change(s)"
-            : $"New unique identity; {_policyChanges.Count} behavior change(s)";
+            ? $"Identity preserved; version {_existingPolicy!.Version} → {_existingPolicy.NextVersion}; {_policyChanges.Count} behavior and {_ruleChanges.Count} rule change(s)"
+            : $"New unique identity; {_policyChanges.Count} behavior and {_ruleChanges.Count} rule change(s)";
         ReviewFormat.Text = legacyPolicy ? "Legacy policy XML" : "Multiple-policy XML";
         ReviewUserMode.Text = legacyPolicy
             ? "XML and compiled .p7b"
@@ -490,6 +517,7 @@ public sealed partial class MainWindow : Window
         _initialPolicyConfiguration = _policyConfiguration.Snapshot;
         _initialPolicyDocument = _policyConfiguration.ToDocument();
         _policyChanges = [];
+        ResetRuleWorkspace();
         BehaviorSourceTitle.Text = _selectedSourceKind == PolicySourceKind.ExistingPolicy
             ? $"Loaded from {Path.GetFileName(_existingPolicy!.Path)}"
             : $"Loaded from {GetSourceDisplayName(_selectedSourceKind)} template";
@@ -628,6 +656,7 @@ public sealed partial class MainWindow : Window
         _policyChanges = PolicyConfigurationComparer.Compare(
             _initialPolicyConfiguration,
             _policyConfiguration.Snapshot);
+        ApplyStagedApplicationRules();
         return true;
     }
 
@@ -836,11 +865,285 @@ public sealed partial class MainWindow : Window
         PopulatePolicyBehavior(_initialPolicyConfiguration!);
     }
 
+    private async void AddRuleFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker(AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.ComputerFolder,
+            CommitButtonText = "Analyze file",
+            ViewMode = PickerViewMode.List
+        };
+        picker.FileTypeFilter.Add("*");
+        var pickedFile = await picker.PickSingleFileAsync();
+        if (pickedFile is null || _policyConfiguration is null)
+        {
+            return;
+        }
+
+        try
+        {
+            IReadOnlyList<PolicyRuleCandidate> candidates =
+                _fileRuleCandidateAnalyzer.Analyze(
+                    pickedFile.Path,
+                    PolicyRuleAction.Allow,
+                    _policyConfiguration.RuleGraph);
+            _evidencePaths.Add(pickedFile.Path);
+            _ruleCandidates.AddRange(candidates);
+            RefreshRuleCandidateList();
+            int recommendedIndex = _ruleCandidates.FindIndex(
+                candidate => candidate.EvidencePath == pickedFile.Path
+                    && candidate.IsRecommended);
+            RuleCandidateList.SelectedIndex = recommendedIndex >= 0
+                ? recommendedIndex
+                : _ruleCandidates.Count - candidates.Count;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Error;
+            RuleWorkspaceInfoBar.Title = "The file could not be analyzed";
+            RuleWorkspaceInfoBar.Message = exception.Message;
+            RuleWorkspaceInfoBar.IsOpen = true;
+        }
+    }
+
+    private void ManualRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        ManualRulePanel.Visibility = Visibility.Visible;
+        ManualRuleValueTextBox.Focus(FocusState.Programmatic);
+    }
+
+    private void CancelManualRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        ManualRulePanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void AnalyzeManualRuleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_policyConfiguration is null
+            || ManualRuleIdentityComboBox.SelectedItem is not ComboBoxItem identityItem
+            || ManualRuleScenarioComboBox.SelectedItem is not ComboBoxItem scenarioItem)
+        {
+            return;
+        }
+
+        try
+        {
+            PolicyRuleIdentity identity = Enum.Parse<PolicyRuleIdentity>(
+                identityItem.Tag.ToString()!);
+            PolicyRuleScenario scenario = Enum.Parse<PolicyRuleScenario>(
+                scenarioItem.Tag.ToString()!);
+            PolicyRuleCandidate candidate = _fileRuleCandidateAnalyzer.CreateManual(
+                PolicyRuleAction.Allow,
+                identity,
+                scenario,
+                ManualRuleValueTextBox.Text,
+                ManualRuleVersionTextBox.Text,
+                _policyConfiguration.RuleGraph);
+            _ruleCandidates.Add(candidate);
+            _evidencePaths.Add("Manual entry");
+            RefreshRuleCandidateList();
+            RuleCandidateList.SelectedIndex = _ruleCandidates.Count - 1;
+            ManualRulePanel.Visibility = Visibility.Collapsed;
+            ManualRuleValueTextBox.Text = string.Empty;
+            ManualRuleVersionTextBox.Text = string.Empty;
+        }
+        catch (Exception exception) when (exception is InvalidDataException
+            or InvalidOperationException)
+        {
+            RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Warning;
+            RuleWorkspaceInfoBar.Title = "Check the manual rule";
+            RuleWorkspaceInfoBar.Message = exception.Message;
+            RuleWorkspaceInfoBar.IsOpen = true;
+        }
+    }
+
+    private void RuleCandidateList_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        int index = RuleCandidateList.SelectedIndex;
+        if (index < 0 || index >= _ruleCandidates.Count)
+        {
+            ClearRuleCandidateDetails();
+            return;
+        }
+
+        PolicyRuleCandidate candidate = _ruleCandidates[index];
+        RuleCandidateTitle.Text = candidate.Title;
+        RuleCandidateEffect.Text = candidate.Effect;
+        RuleTrustBreadthText.Text = Humanize(candidate.TrustBreadth);
+        RuleUpdateResilienceText.Text = Humanize(candidate.UpdateResilience);
+        RuleEvidenceQualityText.Text = Humanize(candidate.EvidenceQuality);
+        RuleConcernsText.Text = candidate.Concerns.Count == 0
+            ? "No concerns detected."
+            : string.Join(Environment.NewLine, candidate.Concerns);
+        if (!candidate.CanApply && !string.IsNullOrWhiteSpace(candidate.UnavailableReason))
+        {
+            RuleConcernsText.Text += $"{Environment.NewLine}{candidate.UnavailableReason}";
+        }
+
+        bool staged = _stagedRuleCandidates.Any(existing => existing.Id == candidate.Id);
+        UseRuleCandidateButton.Content = staged
+            ? "Rule selected"
+            : candidate.IsAlreadyCovered
+                ? "Already covered"
+                : "Use this rule";
+        UseRuleCandidateButton.IsEnabled =
+            candidate.CanApply && !candidate.IsAlreadyCovered && !staged;
+    }
+
+    private void UseRuleCandidateButton_Click(object sender, RoutedEventArgs e)
+    {
+        int index = RuleCandidateList.SelectedIndex;
+        if (index < 0 || index >= _ruleCandidates.Count)
+        {
+            return;
+        }
+
+        PolicyRuleCandidate candidate = _ruleCandidates[index];
+        if (!candidate.CanApply
+            || candidate.IsAlreadyCovered
+            || _stagedRuleCandidates.Any(existing => existing.Id == candidate.Id))
+        {
+            return;
+        }
+
+        _stagedRuleCandidates.Add(candidate);
+        RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Success;
+        RuleWorkspaceInfoBar.Title = "Rule selected";
+        RuleWorkspaceInfoBar.Message =
+            $"{candidate.Title} will be added to the policy.";
+        RuleWorkspaceInfoBar.IsOpen = true;
+        RefreshRuleCandidateList();
+        RuleCandidateList.SelectedIndex = index;
+    }
+
+    private void PopulateRuleWorkspace()
+    {
+        PolicyRuleGraphSnapshot? graph = _policyConfiguration?.RuleGraph;
+        int existingCount = graph?.Rules.Count ?? 0;
+        ExistingRulesSummary.Text = existingCount == 0
+            ? "No existing logical rules detected."
+            : $"{existingCount} logical rule(s) detected and preserved.";
+        RefreshRuleCandidateList();
+    }
+
+    private void RefreshRuleCandidateList()
+    {
+        int selectedIndex = RuleCandidateList.SelectedIndex;
+        RuleCandidateList.Items.Clear();
+        foreach (PolicyRuleCandidate candidate in _ruleCandidates)
+        {
+            var labels = new List<string>();
+            if (candidate.IsRecommended)
+            {
+                labels.Add("Recommended");
+            }
+            if (candidate.IsAlreadyCovered)
+            {
+                labels.Add("Already covered");
+            }
+            if (_stagedRuleCandidates.Any(existing => existing.Id == candidate.Id))
+            {
+                labels.Add("Selected");
+            }
+            if (!candidate.CanApply)
+            {
+                labels.Add("Requires future signer generation");
+            }
+
+            string status = labels.Count == 0
+                ? string.Empty
+                : $"  [{string.Join(" • ", labels)}]";
+            RuleCandidateList.Items.Add(
+                $"{candidate.Title}{status}{Environment.NewLine}{candidate.Effect}");
+        }
+
+        EvidenceSummary.Text = _evidencePaths.Count == 0
+            ? "No evidence added."
+            : $"{_evidencePaths.Count} source(s); {_ruleCandidates.Count} candidate(s); {_stagedRuleCandidates.Count} selected.";
+        if (selectedIndex >= 0 && selectedIndex < RuleCandidateList.Items.Count)
+        {
+            RuleCandidateList.SelectedIndex = selectedIndex;
+        }
+        else if (RuleCandidateList.Items.Count == 0)
+        {
+            ClearRuleCandidateDetails();
+        }
+    }
+
+    private void ApplyStagedApplicationRules()
+    {
+        if (_policyConfiguration is null || _stagedRuleCandidates.Count == 0)
+        {
+            _ruleChanges = [];
+            return;
+        }
+
+        _policyConfiguration.ApplyRules(
+            _stagedRuleCandidates.Select(candidate => new PolicyRuleAddition(candidate)));
+        _ruleChanges = _stagedRuleCandidates
+            .Select(candidate => new PolicySemanticChange(
+                "Application rule",
+                candidate.Title,
+                "Not present",
+                candidate.Effect))
+            .ToArray();
+    }
+
+    private void ResetRuleWorkspace()
+    {
+        _ruleCandidates.Clear();
+        _stagedRuleCandidates.Clear();
+        _evidencePaths.Clear();
+        _ruleChanges = [];
+        if (RuleCandidateList is not null)
+        {
+            RuleCandidateList.Items.Clear();
+        }
+    }
+
+    private void ClearRuleCandidateDetails()
+    {
+        RuleCandidateTitle.Text = "Select a candidate";
+        RuleCandidateEffect.Text =
+            "Add a file or create a manual candidate to inspect its effect.";
+        RuleTrustBreadthText.Text = "Not evaluated";
+        RuleUpdateResilienceText.Text = "Not evaluated";
+        RuleEvidenceQualityText.Text = "Not evaluated";
+        RuleConcernsText.Text = "No candidate selected.";
+        UseRuleCandidateButton.Content = "Use this rule";
+        UseRuleCandidateButton.IsEnabled = false;
+    }
+
+    private static string Humanize<T>(T value)
+        where T : struct, Enum
+    {
+        string text = value.ToString();
+        var characters = new List<char>(text.Length + 4);
+        for (int index = 0; index < text.Length; index++)
+        {
+            if (index > 0 && char.IsUpper(text[index]))
+            {
+                characters.Add(' ');
+            }
+
+            characters.Add(index == 0
+                ? text[index]
+                : char.ToLowerInvariant(text[index]));
+        }
+
+        return new string(characters.ToArray());
+    }
+
     private void ResetPolicyConfiguration()
     {
         _policyConfiguration = null;
         _initialPolicyConfiguration = null;
         _initialPolicyDocument = null;
         _policyChanges = [];
+        ResetRuleWorkspace();
     }
 }

@@ -61,6 +61,20 @@ public sealed class PolicyConfigurationEditor
         return new XDocument(_document);
     }
 
+    public PolicyRuleGraphSnapshot RuleGraph =>
+        PolicyRuleGraphEditor.FromDocument(_document).Snapshot;
+
+    public PolicyRuleChangeResult ApplyRules(
+        IEnumerable<PolicyRuleAddition> additions)
+    {
+        PolicyRuleGraphEditor editor = PolicyRuleGraphEditor.FromDocument(_document);
+        PolicyRuleChangeResult result = editor.Apply(additions);
+        XDocument updated = editor.ToDocument();
+        _document.RemoveNodes();
+        _document.Add(updated.Root!);
+        return result;
+    }
+
     public void Save(string outputPath)
     {
         string fullPath = Path.GetFullPath(outputPath);
