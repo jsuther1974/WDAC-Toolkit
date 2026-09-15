@@ -904,43 +904,85 @@ public sealed partial class MainWindow : Window
                 candidates.Remove(signerPlaceholder);
             }
 
-            var signerCandidates = new List<PolicyRuleCandidate>();
-            foreach (SignerRuleLevel level in new[]
-                     {
-                         SignerRuleLevel.FilePublisher,
-                         SignerRuleLevel.Publisher,
-                         SignerRuleLevel.PcaCertificate
-                     })
-            {
-                try
+            PolicyRuleGraphSnapshot existingRules =
+                _policyConfiguration.RuleGraph;
+            SignerRuleGenerationRequest[] signerRequests =
+            [
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.FilePublisher,
+                    PolicyRuleAction.Allow,
+                    SignerFileNameLevel.OriginalFileName),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.FilePublisher,
+                    PolicyRuleAction.Allow,
+                    SignerFileNameLevel.InternalName),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.FilePublisher,
+                    PolicyRuleAction.Allow,
+                    SignerFileNameLevel.FileDescription),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.FilePublisher,
+                    PolicyRuleAction.Allow,
+                    SignerFileNameLevel.ProductName),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.FilePublisher,
+                    PolicyRuleAction.Allow,
+                    SignerFileNameLevel.PackageFamilyName),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.FilePublisher,
+                    PolicyRuleAction.Allow,
+                    SignerFileNameLevel.FilePath),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.Publisher,
+                    PolicyRuleAction.Allow),
+                new(
+                    pickedFile.Path,
+                    SignerRuleLevel.PcaCertificate,
+                    PolicyRuleAction.Allow)
+            ];
+            using var generationGate = new SemaphoreSlim(initialCount: 4);
+            Task<PolicyRuleCandidate>[] generationTasks = signerRequests
+                .Select(async request =>
                 {
-                    SignerRuleGenerationResult result =
-                        await _signerRuleGenerator.GenerateAsync(
-                            new SignerRuleGenerationRequest(
-                                pickedFile.Path,
-                                level,
-                                PolicyRuleAction.Allow));
-                    signerCandidates.Add(SignerRuleCandidateFactory.Create(
-                        pickedFile.Path,
-                        signerScenario,
-                        result,
-                        _policyConfiguration.RuleGraph));
-                }
-                catch (Exception exception) when (exception is IOException
-                    or UnauthorizedAccessException
-                    or InvalidDataException
-                    or PolicyBuildException)
-                {
-                    signerCandidates.Add(
-                        SignerRuleCandidateFactory.CreateUnavailable(
+                    await generationGate.WaitAsync();
+                    try
+                    {
+                        SignerRuleGenerationResult result =
+                            await _signerRuleGenerator.GenerateAsync(request);
+                        return SignerRuleCandidateFactory.Create(
                             pickedFile.Path,
                             signerScenario,
-                            level,
-                            PolicyRuleAction.Allow,
+                            result,
+                            existingRules);
+                    }
+                    catch (Exception exception) when (exception is IOException
+                        or UnauthorizedAccessException
+                        or InvalidDataException
+                        or PolicyBuildException)
+                    {
+                        return SignerRuleCandidateFactory.CreateUnavailable(
+                            pickedFile.Path,
+                            signerScenario,
+                            request.Level,
+                            request.Action,
                             exception.Message,
-                            isRecommended: false));
-                }
-            }
+                            isRecommended: false,
+                            request.SpecificFileNameLevel);
+                    }
+                    finally
+                    {
+                        generationGate.Release();
+                    }
+                })
+                .ToArray();
+            var signerCandidates = (await Task.WhenAll(generationTasks)).ToList();
 
             int recommendedSigner = signerCandidates.FindIndex(
                 candidate => candidate.CanApply);
@@ -1143,7 +1185,7 @@ public sealed partial class MainWindow : Window
             }
             if (!candidate.CanApply)
             {
-                labels.Add("Requires future signer generation");
+                labels.Add("Unavailable for this evidence");
             }
 
             string status = labels.Count == 0

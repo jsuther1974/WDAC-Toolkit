@@ -225,41 +225,49 @@ public sealed class PolicyRuleGraphEditorTests
         XDocument fragment = XDocument.Parse(
             """
             <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
-              <EKUs><EKU ID="ID_EKU_A" Value="010A" /></EKUs>
+              <EKUs>
+                <EKU ID="ID_EKU_A" Value="010A" />
+                <EKU ID="ID_EKU_B" Value="010B" />
+              </EKUs>
               <FileRules>
                 <FileAttrib ID="ID_FILEATTRIB_A" FileName="Contoso.exe" MinimumFileVersion="2.0.0.0" />
               </FileRules>
               <Signers>
                 <Signer ID="ID_SIGNER_A" Name="Contoso">
                   <CertRoot Type="TBS" Value="AABBCC" />
-                  <CertPublisher Value="Contoso Ltd" />
                   <CertEKU ID="ID_EKU_A" />
+                  <CertEKU ID="ID_EKU_B" />
+                  <CertPublisher Value="Contoso Ltd" />
+                  <CertOemID Value="Contoso OPUS" />
                   <FileAttribRef RuleID="ID_FILEATTRIB_A" />
                 </Signer>
               </Signers>
+              <SigningScenarios>
+                <SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_SOURCE">
+                  <ProductSigners>
+                    <AllowedSigners>
+                      <AllowedSigner SignerId="ID_SIGNER_A" />
+                    </AllowedSigners>
+                  </ProductSigners>
+                </SigningScenario>
+              </SigningScenarios>
               <CiSigners><CiSigner SignerId="ID_SIGNER_A" /></CiSigners>
             </SiPolicy>
             """);
-        var candidate = new PolicyRuleCandidate(
-            "generated",
-            PolicyRuleAction.Allow,
-            PolicyRuleIdentity.FilePublisher,
-            PolicyRuleScenario.Applications,
-            "Trust Contoso by publisher and file identity",
-            "Match Contoso-signed Contoso.exe",
+        PolicyRuleCandidate candidate = SignerRuleCandidateFactory.Create(
             @"C:\Contoso.exe",
-            new Dictionary<string, string>
-            {
-                ["Publisher"] = "Contoso Ltd",
-                ["FileAttribute[0].FileName"] = "Contoso.exe",
-                ["FileAttribute[0].MinimumFileVersion"] = "2.0.0.0"
-            },
-            RuleTrustBreadth.Narrow,
-            RuleUpdateResilience.High,
-            RuleEvidenceQuality.Verified,
-            [],
-            CanApply: true,
-            Fragment: new PolicyRuleFragment(fragment));
+            PolicyRuleScenario.Applications,
+            new SignerRuleGenerationResult(
+                SignerRuleLevel.FilePublisher,
+                new PolicyRuleFragment(fragment),
+                SignerCount: 1,
+                HashRuleCount: 0,
+                Diagnostic: null,
+                SignerFileNameLevel.OriginalFileName,
+                FileAttributeCount: 1),
+            new PolicyRuleGraphSnapshot([], []));
+        Assert.Contains("OPUS", candidate.Title);
+        Assert.Contains("2 EKU constraints", candidate.Effect);
         PolicyRuleGraphEditor editor = PolicyRuleGraphEditor.FromDocument(document);
 
         PolicyRuleChangeResult result = editor.Apply([new PolicyRuleAddition(candidate)]);
@@ -284,10 +292,142 @@ public sealed class PolicyRuleGraphEditorTests
         Assert.Contains(
             output.Root.Element(ns + "CiSigners")!.Elements(ns + "CiSigner"),
             reference => reference.Attribute("SignerId")?.Value == signerId);
-        Assert.Single(result.Changes);
         Assert.Equal(
-            PolicyRuleIdentity.FilePublisher,
-            Assert.Single(editor.Snapshot.Rules).Identity);
+            "Contoso OPUS",
+            signer.Element(ns + "CertOemID")?.Attribute("Value")?.Value);
+        string[] ekuIds = signer.Elements(ns + "CertEKU")
+            .Select(element => element.Attribute("ID")!.Value)
+            .ToArray();
+        Assert.Equal(2, ekuIds.Length);
+        Assert.DoesNotContain("ID_EKU_A", ekuIds);
+        Assert.DoesNotContain("ID_EKU_B", ekuIds);
+        Assert.All(
+            ekuIds,
+            ekuId => Assert.Contains(
+                output.Root.Element(ns + "EKUs")!.Elements(ns + "EKU"),
+                eku => eku.Attribute("ID")?.Value == ekuId));
+        Assert.Single(result.Changes);
+        PolicyLogicalRule merged = Assert.Single(editor.Snapshot.Rules);
+        Assert.Equal(PolicyRuleIdentity.FilePublisher, merged.Identity);
+        Assert.Equal("Contoso OPUS", merged.Conditions["CertOemID"]);
+        Assert.Equal("010A", merged.Conditions["CertEKU"]);
+        Assert.Equal("010B", merged.Conditions["CertEKU[2]"]);
+        Assert.NotNull(editor.Snapshot.FindEquivalent(candidate));
+    }
+
+    [Theory]
+    [InlineData(SignerFileNameLevel.OriginalFileName, "FileName", "Contoso.exe", "original filename")]
+    [InlineData(SignerFileNameLevel.InternalName, "InternalName", "Contoso", "internal name")]
+    [InlineData(SignerFileNameLevel.FileDescription, "FileDescription", "Contoso application", "file description")]
+    [InlineData(SignerFileNameLevel.ProductName, "ProductName", "Contoso Suite", "product name")]
+    [InlineData(SignerFileNameLevel.PackageFamilyName, "PackageFamilyName", "Contoso.App_abc", "package family name")]
+    [InlineData(SignerFileNameLevel.FilePath, "FilePath", @"C:\Contoso.exe", "file path")]
+    public void SignerCandidateFactorySupportsEveryFileNameLevel(
+        SignerFileNameLevel fileNameLevel,
+        string attributeName,
+        string attributeValue,
+        string expectedDisplayName)
+    {
+        string packageVersionAttribute =
+            fileNameLevel == SignerFileNameLevel.PackageFamilyName
+                ? " PackageVersion=\"1.0.0.0\""
+                : string.Empty;
+        XDocument fragment = XDocument.Parse(
+            $"""
+             <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
+               <FileRules>
+                 <FileAttrib ID="ID_FILEATTRIB_A" {attributeName}="{attributeValue}" MinimumFileVersion="2.0.0.0"{packageVersionAttribute} />
+               </FileRules>
+               <Signers>
+                 <Signer ID="ID_SIGNER_A" Name="Contoso">
+                   <CertRoot Type="TBS" Value="AABBCC" />
+                   <CertPublisher Value="Contoso Ltd" />
+                   <FileAttribRef RuleID="ID_FILEATTRIB_A" />
+                 </Signer>
+               </Signers>
+               <SigningScenarios>
+                 <SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_SOURCE">
+                   <ProductSigners>
+                     <AllowedSigners>
+                       <AllowedSigner SignerId="ID_SIGNER_A" />
+                     </AllowedSigners>
+                   </ProductSigners>
+                 </SigningScenario>
+               </SigningScenarios>
+             </SiPolicy>
+             """);
+        var result = new SignerRuleGenerationResult(
+            SignerRuleLevel.FilePublisher,
+            new PolicyRuleFragment(fragment),
+            SignerCount: 1,
+            HashRuleCount: 0,
+            Diagnostic: null,
+            fileNameLevel,
+            FileAttributeCount: 1);
+
+        PolicyRuleCandidate candidate = SignerRuleCandidateFactory.Create(
+            @"C:\Contoso.exe",
+            PolicyRuleScenario.Applications,
+            result,
+            new PolicyRuleGraphSnapshot([], []));
+
+        Assert.True(candidate.CanApply, candidate.UnavailableReason);
+        Assert.Equal(
+            attributeValue,
+            candidate.Conditions[$"FileAttribute[0].{attributeName}"]);
+        Assert.Contains(
+            expectedDisplayName,
+            candidate.Effect,
+            StringComparison.OrdinalIgnoreCase);
+        if (fileNameLevel == SignerFileNameLevel.PackageFamilyName)
+        {
+            Assert.Contains("package version 1.0.0.0", candidate.Effect);
+        }
+    }
+
+    [Fact]
+    public void SignerCandidateFactoryRejectsFilePublisherWithoutFileAttribute()
+    {
+        XDocument fragment = XDocument.Parse(
+            """
+            <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
+              <FileRules />
+              <Signers>
+                <Signer ID="ID_SIGNER_A" Name="Contoso">
+                  <CertRoot Type="TBS" Value="AABBCC" />
+                  <CertPublisher Value="Contoso Ltd" />
+                </Signer>
+              </Signers>
+              <SigningScenarios>
+                <SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_SOURCE">
+                  <ProductSigners>
+                    <AllowedSigners>
+                      <AllowedSigner SignerId="ID_SIGNER_A" />
+                    </AllowedSigners>
+                  </ProductSigners>
+                </SigningScenario>
+              </SigningScenarios>
+            </SiPolicy>
+            """);
+        var result = new SignerRuleGenerationResult(
+            SignerRuleLevel.FilePublisher,
+            new PolicyRuleFragment(fragment),
+            SignerCount: 1,
+            HashRuleCount: 0,
+            Diagnostic:
+                "ConfigCI generated a signer without the requested file attribute.",
+            SignerFileNameLevel.PackageFamilyName,
+            FileAttributeCount: 0);
+
+        PolicyRuleCandidate candidate = SignerRuleCandidateFactory.Create(
+            @"C:\Contoso.exe",
+            PolicyRuleScenario.Applications,
+            result,
+            new PolicyRuleGraphSnapshot([], []));
+
+        Assert.False(candidate.CanApply);
+        Assert.Null(candidate.Fragment);
+        Assert.Contains("without the requested file attribute", candidate.UnavailableReason);
     }
 
     [Fact]

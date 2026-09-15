@@ -116,17 +116,30 @@ public enum SignerRuleLevel
     FilePublisher
 }
 
+public enum SignerFileNameLevel
+{
+    OriginalFileName,
+    InternalName,
+    FileDescription,
+    ProductName,
+    PackageFamilyName,
+    FilePath
+}
+
 public sealed record SignerRuleGenerationRequest(
     string FilePath,
     SignerRuleLevel Level,
-    PolicyRuleAction Action);
+    PolicyRuleAction Action,
+    SignerFileNameLevel? SpecificFileNameLevel = null);
 
 public sealed record SignerRuleGenerationResult(
     SignerRuleLevel RequestedLevel,
     PolicyRuleFragment Fragment,
     int SignerCount,
     int HashRuleCount,
-    string? Diagnostic)
+    string? Diagnostic,
+    SignerFileNameLevel? SpecificFileNameLevel = null,
+    int FileAttributeCount = 0)
 {
     public bool IsSignerRule => SignerCount > 0;
 

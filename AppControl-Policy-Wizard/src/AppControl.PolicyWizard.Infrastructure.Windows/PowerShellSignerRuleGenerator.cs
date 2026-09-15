@@ -47,7 +47,8 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
                 sourcePath,
                 outputPath,
                 request.Level,
-                request.Action);
+                request.Action,
+                request.SpecificFileNameLevel);
             using var process = new Process { StartInfo = startInfo };
             try
             {
@@ -125,7 +126,9 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
                 new PolicyRuleFragment(fragment),
                 output.SignerCount,
                 output.HashRuleCount,
-                output.Diagnostic);
+                output.Diagnostic,
+                request.SpecificFileNameLevel,
+                output.FileAttributeCount);
         }
         catch (JsonException exception)
         {
@@ -146,7 +149,8 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         string sourcePath,
         string outputPath,
         SignerRuleLevel level,
-        PolicyRuleAction action)
+        PolicyRuleAction action,
+        SignerFileNameLevel? specificFileNameLevel)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -171,6 +175,12 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         startInfo.ArgumentList.Add(level.ToString());
         startInfo.ArgumentList.Add("-Action");
         startInfo.ArgumentList.Add(action.ToString());
+        if (specificFileNameLevel is not null)
+        {
+            startInfo.ArgumentList.Add("-SpecificFileNameLevel");
+            startInfo.ArgumentList.Add(specificFileNameLevel.Value.ToString());
+        }
+
         return startInfo;
     }
 
@@ -179,6 +189,8 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         public int SignerCount { get; init; }
 
         public int HashRuleCount { get; init; }
+
+        public int FileAttributeCount { get; init; }
 
         public string? Diagnostic { get; init; }
     }

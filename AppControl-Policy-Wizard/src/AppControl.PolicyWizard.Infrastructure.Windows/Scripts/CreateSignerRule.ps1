@@ -12,7 +12,16 @@ param (
 
     [Parameter(Mandatory = $true)]
     [ValidateSet("Allow", "Deny")]
-    [string]$Action
+    [string]$Action,
+
+    [ValidateSet(
+        "OriginalFileName",
+        "InternalName",
+        "FileDescription",
+        "ProductName",
+        "PackageFamilyName",
+        "FilePath")]
+    [string]$SpecificFileNameLevel
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +43,15 @@ $ruleParameters = @{
     DriverFilePath = $SourcePath
     Fallback = "Hash"
 }
+if (-not [string]::IsNullOrWhiteSpace($SpecificFileNameLevel))
+{
+    if ($Level -ne "FilePublisher")
+    {
+        throw "SpecificFileNameLevel is valid only for FilePublisher rules."
+    }
+
+    $ruleParameters.SpecificFileNameLevel = $SpecificFileNameLevel
+}
 if ($Action -eq "Deny")
 {
     $ruleParameters.Deny = $true
@@ -49,6 +67,7 @@ New-CIPolicy -Rules $rules -FilePath $OutputPath | Out-Null
 
 [xml]$policy = Get-Content -LiteralPath $OutputPath
 $signerCount = @($policy.SiPolicy.Signers.Signer).Count
+$fileAttributeCount = @($policy.SiPolicy.FileRules.FileAttrib).Count
 $hashRuleCount = @(
     $policy.SiPolicy.FileRules.ChildNodes |
         Where-Object { $null -ne $_.Hash }
@@ -61,6 +80,10 @@ elseif ($signerCount -eq 0)
 {
     "ConfigCI did not generate a signer rule."
 }
+elseif ($Level -eq "FilePublisher" -and $fileAttributeCount -eq 0)
+{
+    "ConfigCI generated a signer without the requested file attribute."
+}
 else
 {
     $null
@@ -68,6 +91,7 @@ else
 
 [pscustomobject]@{
     SignerCount = $signerCount
+    FileAttributeCount = $fileAttributeCount
     HashRuleCount = $hashRuleCount
     Diagnostic = $diagnostic
 } | ConvertTo-Json -Compress
