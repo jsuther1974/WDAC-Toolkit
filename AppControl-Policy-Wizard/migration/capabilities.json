@@ -62,7 +62,7 @@
       "area": "Base policy",
       "name": "Review and modify policy options",
       "priority": "P0",
-      "migrationStatus": "implemented",
+      "migrationStatus": "validated",
       "decisionStatus": "accepted",
       "targetDirection": "Use one scope-based Policy behavior step with policy-scoped, device-wide, special-enforcement, platform-behavior, and compatibility sections. Default new policies to Audit and multiple-policy format, represent UMCI as an intent choice, preserve unknown content through delta-only edits, keep signing as a separate deployment-protection stage, and offer single-policy format only as an analyzed secondary export.",
       "legacyLocation": "WDAC-Policy-Wizard/app/src/ConfigTemplate.cs",
@@ -71,7 +71,8 @@
         "Hash-verified template normalization manifest",
         "Scope-based WinUI Policy behavior and semantic review steps",
         "AppControl.PolicyWizard.Core.Tests",
-        "AppControl.PolicyWizard.Parity.Tests"
+        "AppControl.PolicyWizard.Parity.Tests",
+        "GitHub Actions run 34917668908"
       ]
     },
     {

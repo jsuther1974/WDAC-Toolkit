@@ -56,18 +56,23 @@ public sealed class CapabilityLedgerTests
     }
 
     [Fact]
-    public void InitialBurndownHasThreeValidatedCapabilities()
+    public void PolicyOptionEditingIsValidatedWithRemoteEvidence()
     {
         using JsonDocument ledger = JsonDocument.Parse(
             File.ReadAllText(
                 Path.Combine(AppContext.BaseDirectory, "Migration", "capabilities.json")));
 
-        int validated = ledger.RootElement
+        JsonElement policyOptions = ledger.RootElement
             .GetProperty("capabilities")
             .EnumerateArray()
-            .Count(capability =>
-                capability.GetProperty("migrationStatus").GetString() == "validated");
+            .Single(capability =>
+                capability.GetProperty("id").GetString() == "policy-option-editing");
 
-        Assert.Equal(3, validated);
+        Assert.Equal(
+            "validated",
+            policyOptions.GetProperty("migrationStatus").GetString());
+        Assert.Contains(
+            policyOptions.GetProperty("successorEvidence").EnumerateArray(),
+            evidence => evidence.GetString() == "GitHub Actions run 34917668908");
     }
 }
