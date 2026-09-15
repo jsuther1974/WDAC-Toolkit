@@ -19,7 +19,8 @@ public sealed record PolicyBuildRequest(
     PolicySourceKind SourceKind,
     string? ExistingPolicyPath,
     string PolicyName,
-    string OutputPath);
+    string OutputPath,
+    PolicyConfigurationEditor? Configuration = null);
 
 public sealed record PolicyBuildResult(
     string XmlPath,

@@ -57,13 +57,18 @@
                     Content="1  Choose source"
                     SelectsOnInvoked="False" />
                 <NavigationViewItem
+                    x:Name="BehaviorStepNavigationItem"
+                    Content="2  Policy behavior"
+                    IsEnabled="False"
+                    SelectsOnInvoked="False" />
+                <NavigationViewItem
                     x:Name="SettingsStepNavigationItem"
-                    Content="2  Choose output"
+                    Content="3  Choose output"
                     IsEnabled="False"
                     SelectsOnInvoked="False" />
                 <NavigationViewItem
                     x:Name="ReviewStepNavigationItem"
-                    Content="3  Review"
+                    Content="4  Review"
                     IsEnabled="False"
                     SelectsOnInvoked="False" />
             </NavigationView.MenuItems>
@@ -290,6 +295,301 @@
                             </StackPanel>
                         </Grid>
 
+                        <Grid x:Name="BehaviorPage" Visibility="Collapsed">
+                            <StackPanel Spacing="20">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Style="{StaticResource PageTitleStyle}" Text="Choose policy behavior" />
+                                    <TextBlock
+                                        Style="{StaticResource SecondaryTextStyle}"
+                                        Text="Settings are grouped by their effective runtime scope. Unrecognized policy content is preserved unless you explicitly change it." />
+                                </StackPanel>
+
+                                <InfoBar
+                                    x:Name="PolicyTypeInfoBar"
+                                    IsOpen="True"
+                                    IsClosable="False"
+                                    Severity="Informational"
+                                    Title="Base policy"
+                                    Message="This policy can define application, driver, trust, and supplemental-policy behavior." />
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <Grid ColumnSpacing="20">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="10">
+                                            <StackPanel Spacing="3">
+                                                <TextBlock
+                                                    x:Name="BehaviorSourceTitle"
+                                                    FontWeight="SemiBold"
+                                                    Text="Loaded from Signed and reputable template" />
+                                                <TextBlock
+                                                    x:Name="BehaviorSourceMessage"
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="The controls below reflect the normalized template defaults." />
+                                            </StackPanel>
+                                            <StackPanel Spacing="3">
+                                                <TextBlock
+                                                    x:Name="BehaviorChangeTitle"
+                                                    FontWeight="SemiBold"
+                                                    Text="No changes from source" />
+                                                <TextBlock
+                                                    x:Name="BehaviorChangeDetails"
+                                                    Style="{StaticResource SecondaryTextStyle}"
+                                                    Text="All exposed settings still match the selected policy source." />
+                                            </StackPanel>
+                                        </StackPanel>
+                                        <Button
+                                            x:Name="ResetBehaviorButton"
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="Reset policy behavior to source defaults"
+                                            Content="Reset to source defaults"
+                                            IsEnabled="False"
+                                            Click="ResetBehaviorButton_Click" />
+                                    </Grid>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel Spacing="18">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Policy-scoped behavior" />
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="These choices primarily control what this policy evaluates and trusts." />
+                                        </StackPanel>
+
+                                        <StackPanel Spacing="8">
+                                            <TextBlock FontWeight="SemiBold" Text="Deployment mode" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <ToggleButton
+                                                    x:Name="AuditModeButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    AutomationProperties.Name="Use audit mode"
+                                                    Content="Audit"
+                                                    IsChecked="True"
+                                                    Tag="Audit"
+                                                    Click="DeploymentModeButton_Click" />
+                                                <ToggleButton
+                                                    x:Name="EnforcedModeButton"
+                                                    Grid.Column="1"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    AutomationProperties.Name="Use enforced mode"
+                                                    Content="Enforced"
+                                                    Tag="Enforced"
+                                                    Click="DeploymentModeButton_Click" />
+                                            </Grid>
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Audit records policy decisions without enforcing ordinary allow rules. Device-wide and special settings may still alter runtime behavior." />
+                                        </StackPanel>
+
+                                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                                        <StackPanel Spacing="8">
+                                            <TextBlock FontWeight="SemiBold" Text="Policy scope" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <ToggleButton
+                                                    x:Name="ApplicationsAndDriversButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    AutomationProperties.Name="Control applications and drivers"
+                                                    Content="Applications and drivers"
+                                                    IsChecked="True"
+                                                    Tag="Applications"
+                                                    Click="PolicyScopeButton_Click" />
+                                                <ToggleButton
+                                                    x:Name="DriversOnlyButton"
+                                                    Grid.Column="1"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    AutomationProperties.Name="Control drivers only"
+                                                    Content="Drivers only"
+                                                    Tag="Drivers"
+                                                    Click="PolicyScopeButton_Click" />
+                                            </Grid>
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Applications and drivers enables user-mode code integrity. Driver-only policies don't expose user-mode trust or script controls." />
+                                        </StackPanel>
+
+                                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                                        <ToggleSwitch
+                                            x:Name="AllowSupplementalToggle"
+                                            Header="Allow supplemental policies to extend this base"
+                                            OffContent="Not extensible"
+                                            OnContent="Extensible" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel Spacing="16">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Trust sources" />
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Each policy independently chooses whether to trust these sources. Managed Installer environment configuration remains separate." />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            x:Name="CloudReputationToggle"
+                                            Header="Allow code predicted safe by Smart App Control"
+                                            OffContent="Intelligent Security Graph disabled"
+                                            OnContent="Intelligent Security Graph enabled"
+                                            Toggled="CloudReputationToggle_Toggled" />
+                                        <StackPanel Margin="24,0,0,0" Spacing="4">
+                                            <ToggleSwitch
+                                                x:Name="InvalidateEasToggle"
+                                                Header="Revalidate Smart App Control reputation after restart"
+                                                OffContent="Cached reputation retained"
+                                                OnContent="Revalidate after restart" />
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Device-wide effect. Available only for application-and-driver policies that enable Intelligent Security Graph authorization." />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            x:Name="ManagedInstallerToggle"
+                                            Header="Managed Installer"
+                                            OffContent="Not trusted"
+                                            OnContent="Trusted" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel Spacing="16">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Special enforcement behavior" />
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="These settings are authored by this policy but don't follow Audit versus Enforced in all circumstances." />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            x:Name="ScriptEnforcementToggle"
+                                            Header="Enforce supported scripts"
+                                            OffContent="Script enforcement disabled"
+                                            OnContent="Script enforcement enabled" />
+                                        <ToggleSwitch
+                                            x:Name="DynamicCodeSecurityToggle"
+                                            Header="Activate additional .NET dynamic code security mitigations"
+                                            OffContent="Disabled"
+                                            OnContent="Additional mitigations active"
+                                            Toggled="DynamicCodeSecurityToggle_Toggled" />
+                                        <InfoBar
+                                            x:Name="DynamicCodeWarning"
+                                            IsOpen="False"
+                                            IsClosable="False"
+                                            Severity="Warning"
+                                            Title="Use Dynamic Code Security with caution"
+                                            Message="Dynamic Code Security turns on multiple security-hardening features in .NET and may cause unexpected behavior for some apps. This can occur even when the policy is set to audit mode. Some apps may encounter failures without any corresponding events logged. Use with caution." />
+                                    </StackPanel>
+                                </Border>
+
+                                <Expander Header="Device-wide runtime controls" IsExpanded="False">
+                                    <Border Margin="0,8,0,0" Style="{StaticResource CardStyle}">
+                                        <StackPanel Spacing="16">
+                                            <TextBlock
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="These settings can change boot, driver, or reputation behavior for the device and aren't controlled solely by this policy's deployment mode." />
+                                            <ToggleSwitch
+                                                x:Name="HvciToggle"
+                                                Header="Hypervisor-protected Code Integrity"
+                                                OffContent="Disabled"
+                                                OnContent="Enabled" />
+                                            <TextBlock
+                                                x:Name="HvciSummaryText"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Changes the device runtime environment and isn't governed by Audit mode." />
+                                            <ToggleSwitch
+                                                x:Name="WhqlOnlyToggle"
+                                                Header="Require WHQL drivers"
+                                                OffContent="Standard driver trust"
+                                                OnContent="WHQL required" />
+                                            <ToggleSwitch
+                                                x:Name="FlightSigningToggle"
+                                                Header="Allow flight-signed code"
+                                                OffContent="Flight signing disabled"
+                                                OnContent="Flight signing allowed" />
+                                            <ToggleSwitch
+                                                x:Name="AdvancedBootToggle"
+                                                Header="Enable advanced boot options menu"
+                                                OffContent="Disabled"
+                                                OnContent="Enabled" />
+                                            <ToggleSwitch
+                                                x:Name="BootAuditToggle"
+                                                Header="Fall back to boot audit on failure"
+                                                OffContent="Disabled"
+                                                OnContent="Enabled" />
+                                        </StackPanel>
+                                    </Border>
+                                </Expander>
+
+                                <Expander Header="Advanced policy-scoped controls" IsExpanded="False">
+                                    <Border Margin="0,8,0,0" Style="{StaticResource CardStyle}">
+                                        <StackPanel Spacing="16">
+                                            <ToggleSwitch
+                                                x:Name="UpdateNoRebootToggle"
+                                                Header="Apply policy updates without reboot"
+                                                OffContent="Reboot may be required"
+                                                OnContent="No reboot update" />
+                                            <ToggleSwitch
+                                                x:Name="StoreAppsToggle"
+                                                Header="Enforce Store applications"
+                                                OffContent="Not required"
+                                                OnContent="Required" />
+                                            <ToggleSwitch
+                                                x:Name="FilePathProtectionToggle"
+                                                Header="Protect FilePath rules at runtime"
+                                                OffContent="Runtime protection disabled"
+                                                OnContent="Runtime protection enabled" />
+                                            <ToggleSwitch
+                                                x:Name="RevokedAsUnsignedToggle"
+                                                Header="Treat revoked or expired signatures as unsigned"
+                                                OffContent="Preserve signature classification"
+                                                OnContent="Evaluate as unsigned" />
+                                        </StackPanel>
+                                    </Border>
+                                </Expander>
+
+                                <Border Style="{StaticResource CardStyle}">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Platform and compatibility" />
+                                        <StackPanel Spacing="3">
+                                            <TextBlock FontWeight="SemiBold" Text="Deployment protection" />
+                                            <TextBlock
+                                                x:Name="SigningStatusText"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Unsigned policy output is allowed." />
+                                        </StackPanel>
+                                        <StackPanel Spacing="3">
+                                            <TextBlock FontWeight="SemiBold" Text="Secure and app settings" />
+                                            <TextBlock
+                                                x:Name="PlatformSettingsSummary"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="No configurable platform behaviors were detected." />
+                                        </StackPanel>
+                                        <StackPanel Spacing="3">
+                                            <TextBlock FontWeight="SemiBold" Text="Compatibility findings" />
+                                            <TextBlock
+                                                x:Name="CompatibilitySummary"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="No unsupported or unknown policy options were detected." />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+
                         <Grid x:Name="SettingsPage" Visibility="Collapsed">
                             <StackPanel Spacing="20">
                                 <StackPanel Spacing="8">
@@ -331,7 +631,7 @@
                                                     Text="Signed and reputable template" />
                                                 <TextBlock
                                                     Style="{StaticResource SecondaryTextStyle}"
-                                                    Text="Multiple-policy XML; rules and policy options remain unchanged." />
+                                                    Text="Multiple-policy XML; unselected and unknown policy content is preserved." />
                                             </StackPanel>
                                         </Grid>
                                     </StackPanel>
@@ -385,6 +685,20 @@
                                                     Text="Ready" />
                                             </Border>
                                         </Grid>
+
+                                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                                        <StackPanel Spacing="4">
+                                            <TextBlock FontWeight="SemiBold" Text="Policy behavior" />
+                                            <TextBlock
+                                                x:Name="ReviewBehavior"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="Audit • Applications and drivers" />
+                                            <TextBlock
+                                                x:Name="ReviewChanges"
+                                                Style="{StaticResource SecondaryTextStyle}"
+                                                Text="No administrator option changes." />
+                                        </StackPanel>
 
                                         <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
@@ -461,10 +775,10 @@
                                 x:Name="ProgressText"
                                 FontSize="12"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="Step 1 of 3" />
+                                Text="Step 1 of 4" />
                             <ProgressBar
                                 x:Name="WorkflowProgress"
-                                Maximum="3"
+                                Maximum="4"
                                 Minimum="0"
                                 Value="1" />
                         </StackPanel>

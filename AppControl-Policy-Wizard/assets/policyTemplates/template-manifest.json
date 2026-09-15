@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "id": "signed-reputable",
+      "fileName": "SignedReputable.xml",
+      "sha256": "074E40D7945F89967DE5B805C06D1FC5B8FF25B725AAC51C7B049D53FB6F4867",
+      "source": "MicrosoftDocs/WDAC-Toolkit inbox policy snapshot",
+      "sourceRevision": "0f61786f55d71d5e8a563163a0bdeddc50be9571",
+      "normalization": [
+        {
+          "action": "removePolicyOption",
+          "xmlValue": "Enabled:Inherit Default Policy",
+          "reason": "Rule option 5 is reserved and has no effect.",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "windows-only",
+      "fileName": "DefaultWindows_Audit.xml",
+      "sha256": "5A5D238CB5EA6EECE000A69217E8C1669528832EFEEAA270F5D68CD530D5B3EB",
+      "source": "MicrosoftDocs/WDAC-Toolkit inbox policy snapshot",
+      "sourceRevision": "969081a0b646633840de55c1c1558c770ea13b50",
+      "normalization": [
+        {
+          "action": "removePolicyOption",
+          "xmlValue": "Enabled:Inherit Default Policy",
+          "reason": "Rule option 5 is reserved and has no effect.",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

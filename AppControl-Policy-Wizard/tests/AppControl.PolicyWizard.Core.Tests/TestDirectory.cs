@@ -37,6 +37,9 @@ internal sealed class TestDirectory : IDisposable
                  <Rule>
                    <Option>Enabled:Audit Mode</Option>
                  </Rule>
+                 <Rule>
+                   <Option>Enabled:Unsigned System Integrity Policy</Option>
+                 </Rule>
                </Rules>
                <Settings>
                  <Setting Provider="PolicyInfo" Key="Information" ValueName="Name">
@@ -49,6 +52,13 @@ internal sealed class TestDirectory : IDisposable
              """;
         File.WriteAllText(policyPath, xml);
         return policyPath;
+    }
+
+    public string WriteText(string fileName, string contents)
+    {
+        string path = System.IO.Path.Combine(Path, fileName);
+        File.WriteAllText(path, contents);
+        return path;
     }
 
     public void Dispose()

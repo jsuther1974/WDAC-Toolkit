@@ -9,21 +9,43 @@ public sealed class PolicyWorkflowService
     private readonly IPolicyCompiler _compiler;
     private readonly PolicyDocumentService _documentService;
     private readonly IReadOnlyDictionary<PolicySourceKind, string> _templatePaths;
+    private readonly PolicyTemplateManifest? _templateManifest;
+    private readonly PolicyTemplateNormalizer _templateNormalizer;
 
     public PolicyWorkflowService(
         IPolicyCompiler compiler,
         IReadOnlyDictionary<PolicySourceKind, string> templatePaths,
-        PolicyDocumentService? documentService = null)
+        PolicyDocumentService? documentService = null,
+        PolicyTemplateManifest? templateManifest = null,
+        PolicyTemplateNormalizer? templateNormalizer = null)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
         _templatePaths = new Dictionary<PolicySourceKind, string>(
             templatePaths ?? throw new ArgumentNullException(nameof(templatePaths)));
         _documentService = documentService ?? new PolicyDocumentService();
+        _templateManifest = templateManifest;
+        _templateNormalizer = templateNormalizer ?? new PolicyTemplateNormalizer();
     }
 
     public PolicySourceInfo InspectExistingPolicy(string policyPath)
     {
         return _documentService.InspectExistingPolicy(policyPath);
+    }
+
+    public PolicyConfigurationEditor OpenPolicyConfiguration(
+        PolicySourceKind sourceKind,
+        string? existingPolicyPath = null)
+    {
+        string sourcePath = ResolveSourcePath(sourceKind, existingPolicyPath);
+        if (sourceKind == PolicySourceKind.ExistingPolicy || _templateManifest is null)
+        {
+            return PolicyConfigurationEditor.Open(sourcePath);
+        }
+
+        PolicyTemplateDefinition definition = GetTemplateDefinition(sourcePath);
+        PolicyTemplateNormalizationDocumentResult normalized =
+            _templateNormalizer.NormalizeToDocument(sourcePath, definition);
+        return PolicyConfigurationEditor.FromDocument(normalized.Document);
     }
 
     public async Task<PolicyBuildResult> BuildAsync(
@@ -45,7 +67,16 @@ public sealed class PolicyWorkflowService
         string fullOutputPath = Path.GetFullPath(request.OutputPath);
         ValidateOutputPath(sourcePath, fullOutputPath);
 
-        XDocument sourceDocument = _documentService.Load(sourcePath);
+        XDocument sourceDocument = request.Configuration?.ToDocument()
+            ?? _documentService.Load(sourcePath);
+        PolicyConfigurationSnapshot sourceConfiguration =
+            PolicyConfigurationEditor.FromDocument(sourceDocument).Snapshot;
+        if (!sourceConfiguration.GetOption(PolicyOptionId.UnsignedPolicyAllowed).IsEnabled)
+        {
+            throw new PolicyBuildException(
+                "This policy requires a signed binary. The deployment-protection signing stage is not implemented yet, so no deployable policy was created.");
+        }
+
         XNamespace policyNamespace = PolicyDocumentService.PolicyNamespace;
         string? sourcePolicyId = sourceDocument.Root!.Element(policyNamespace + "PolicyID")?.Value;
         string? sourceBasePolicyId = sourceDocument.Root.Element(policyNamespace + "BasePolicyID")?.Value;
@@ -72,7 +103,11 @@ public sealed class PolicyWorkflowService
 
         try
         {
-            File.Copy(sourcePath, workingXmlPath, overwrite: false);
+            PrepareWorkingCopy(
+                request.SourceKind,
+                sourcePath,
+                workingXmlPath,
+                request.Configuration);
 
             progress?.Report(new PolicyBuildProgress(
                 PolicyBuildStage.Compiling,
@@ -156,6 +191,41 @@ public sealed class PolicyWorkflowService
                 Directory.Delete(workingDirectory, recursive: true);
             }
         }
+    }
+
+    private void PrepareWorkingCopy(
+        PolicySourceKind sourceKind,
+        string sourcePath,
+        string workingXmlPath,
+        PolicyConfigurationEditor? configuration)
+    {
+        if (configuration is not null)
+        {
+            configuration.Save(workingXmlPath);
+            return;
+        }
+
+        if (sourceKind == PolicySourceKind.ExistingPolicy || _templateManifest is null)
+        {
+            File.Copy(sourcePath, workingXmlPath, overwrite: false);
+            return;
+        }
+
+        string sourceFileName = Path.GetFileName(sourcePath);
+        PolicyTemplateDefinition definition = GetTemplateDefinition(sourcePath);
+        _templateNormalizer.Normalize(sourcePath, workingXmlPath, definition);
+    }
+
+    private PolicyTemplateDefinition GetTemplateDefinition(string sourcePath)
+    {
+        string sourceFileName = Path.GetFileName(sourcePath);
+        return _templateManifest!.Templates.SingleOrDefault(
+            template => string.Equals(
+                template.FileName,
+                sourceFileName,
+                StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidDataException(
+                $"The packaged template '{sourceFileName}' is not registered in the template manifest.");
     }
 
     private string ResolveSourcePath(

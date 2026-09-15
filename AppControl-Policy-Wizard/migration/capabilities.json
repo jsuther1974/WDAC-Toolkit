@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "asOf": "2026-09-14",
+  "asOf": "2026-09-15",
   "statusOrder": [
     "legacy-only",
     "characterized",
@@ -62,11 +62,17 @@
       "area": "Base policy",
       "name": "Review and modify policy options",
       "priority": "P0",
-      "migrationStatus": "legacy-only",
-      "decisionStatus": "pending-review",
-      "targetDirection": "Present multiple-policy options first and move legacy single-policy format behind an advanced compatibility path.",
+      "migrationStatus": "implemented",
+      "decisionStatus": "accepted",
+      "targetDirection": "Use one scope-based Policy behavior step with policy-scoped, device-wide, special-enforcement, platform-behavior, and compatibility sections. Default new policies to Audit and multiple-policy format, represent UMCI as an intent choice, preserve unknown content through delta-only edits, keep signing as a separate deployment-protection stage, and offer single-policy format only as an analyzed secondary export.",
       "legacyLocation": "WDAC-Policy-Wizard/app/src/ConfigTemplate.cs",
-      "successorEvidence": []
+      "successorEvidence": [
+        "AppControl.PolicyWizard.Core policy option catalog and lossless delta editor",
+        "Hash-verified template normalization manifest",
+        "Scope-based WinUI Policy behavior and semantic review steps",
+        "AppControl.PolicyWizard.Core.Tests",
+        "AppControl.PolicyWizard.Parity.Tests"
+      ]
     },
     {
       "id": "custom-rule-authoring",

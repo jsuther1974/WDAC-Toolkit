@@ -18,7 +18,12 @@ internal static class PolicyWorkflowFactory
 
         var compiler = new PowerShellConfigCiCompiler(
             Path.Combine(applicationDirectory, "Scripts", "CreateBasePolicy.ps1"));
+        PolicyTemplateManifest templateManifest = PolicyTemplateManifest.Load(
+            Path.Combine(applicationDirectory, "Templates", "template-manifest.json"));
 
-        return new PolicyWorkflowService(compiler, templatePaths);
+        return new PolicyWorkflowService(
+            compiler,
+            templatePaths,
+            templateManifest: templateManifest);
     }
 }
