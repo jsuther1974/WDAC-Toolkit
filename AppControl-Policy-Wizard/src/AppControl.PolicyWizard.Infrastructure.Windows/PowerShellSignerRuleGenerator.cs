@@ -20,6 +20,24 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        IReadOnlyList<SignerRuleGenerationOutcome> outcomes =
+            await GenerateBatchAsync([request], cancellationToken);
+        SignerRuleGenerationOutcome outcome = outcomes[0];
+        return outcome.Result
+            ?? throw new PolicyBuildException(
+                outcome.Error ?? "ConfigCI signer generation failed.");
+    }
+
+    public async Task<IReadOnlyList<SignerRuleGenerationOutcome>> GenerateBatchAsync(
+        IReadOnlyList<SignerRuleGenerationRequest> requests,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        if (requests.Count == 0)
+        {
+            return [];
+        }
+
         if (!File.Exists(_scriptPath))
         {
             throw new FileNotFoundException(
@@ -27,43 +45,36 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
                 _scriptPath);
         }
 
-        string sourcePath = Path.GetFullPath(request.FilePath);
-        if (!File.Exists(sourcePath))
-        {
-            throw new FileNotFoundException(
-                "The signer evidence file could not be found.",
-                sourcePath);
-        }
-
+        SignerRuleGenerationRequest[] normalizedRequests = requests
+            .Select(NormalizeRequest)
+            .ToArray();
         string workingDirectory = Path.Combine(
             Path.GetTempPath(),
-            $"appcontrol-signer-{Guid.NewGuid():N}");
-        string outputPath = Path.Combine(workingDirectory, "SignerRule.xml");
-        Directory.CreateDirectory(workingDirectory);
+            $"appcontrol-signer-batch-{Guid.NewGuid():N}");
+        string requestPath = Path.Combine(workingDirectory, "requests.json");
+        string outputDirectory = Path.Combine(workingDirectory, "results");
+        Directory.CreateDirectory(outputDirectory);
 
         try
         {
-            ProcessStartInfo startInfo = CreateStartInfo(
-                sourcePath,
-                outputPath,
-                request.Level,
-                request.Action,
-                request.SpecificFileNameLevel);
+            await File.WriteAllTextAsync(
+                requestPath,
+                JsonSerializer.Serialize(
+                    normalizedRequests.Select(request => new PowerShellSignerRequest
+                    {
+                        SourcePath = request.FilePath,
+                        Level = request.Level.ToString(),
+                        Action = request.Action.ToString(),
+                        SpecificFileNameLevel =
+                            request.SpecificFileNameLevel?.ToString()
+                    })),
+                cancellationToken);
+
+            ProcessStartInfo startInfo = CreateBatchStartInfo(
+                requestPath,
+                outputDirectory);
             using var process = new Process { StartInfo = startInfo };
-            try
-            {
-                if (!process.Start())
-                {
-                    throw new PolicyBuildException(
-                        "Windows PowerShell could not be started for signer generation.");
-                }
-            }
-            catch (Win32Exception exception)
-            {
-                throw new PolicyBuildException(
-                    "Windows PowerShell is unavailable, so the signer rule cannot be generated.",
-                    exception);
-            }
+            StartProcess(process);
 
             Task<string> outputTask =
                 process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -97,38 +108,67 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
                         : details);
             }
 
-            string? jsonLine = standardOutput
-                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => line.Trim())
-                .LastOrDefault(line => line.StartsWith('{') && line.EndsWith('}'));
-            if (jsonLine is null)
+            PowerShellSignerBatchOutput output = DeserializeOutput(standardOutput);
+            if (output.Results.Count != normalizedRequests.Length)
             {
                 throw new PolicyBuildException(
-                    "ConfigCI signer generation completed without returning details.");
+                    $"ConfigCI returned {output.Results.Count} result(s) for "
+                    + $"{normalizedRequests.Length} request(s).");
             }
 
-            PowerShellSignerOutput output = JsonSerializer.Deserialize<PowerShellSignerOutput>(
-                    jsonLine,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                ?? throw new PolicyBuildException(
-                    "ConfigCI returned empty signer-generation details.");
-            if (!File.Exists(outputPath))
+            var resultsByIndex = output.Results.ToDictionary(result => result.Index);
+            var outcomes = new List<SignerRuleGenerationOutcome>(
+                normalizedRequests.Length);
+            for (int index = 0; index < normalizedRequests.Length; index++)
             {
-                throw new PolicyBuildException(
-                    "ConfigCI did not create the expected signer policy fragment.");
+                SignerRuleGenerationRequest request = normalizedRequests[index];
+                if (!resultsByIndex.TryGetValue(index, out PowerShellSignerOutput? item))
+                {
+                    throw new PolicyBuildException(
+                        $"ConfigCI did not return result {index}.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.Error))
+                {
+                    outcomes.Add(new SignerRuleGenerationOutcome(
+                        request,
+                        Result: null,
+                        item.Error));
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(item.OutputFileName))
+                {
+                    throw new PolicyBuildException(
+                        $"ConfigCI result {index} did not identify an output policy.");
+                }
+
+                string outputPath = Path.Combine(
+                    outputDirectory,
+                    item.OutputFileName);
+                if (!File.Exists(outputPath))
+                {
+                    throw new PolicyBuildException(
+                        $"ConfigCI did not create result policy {index}.");
+                }
+
+                XDocument fragment = XDocument.Load(
+                    outputPath,
+                    LoadOptions.PreserveWhitespace);
+                outcomes.Add(new SignerRuleGenerationOutcome(
+                    request,
+                    new SignerRuleGenerationResult(
+                        request.Level,
+                        new PolicyRuleFragment(fragment),
+                        item.SignerCount,
+                        item.HashRuleCount,
+                        item.Diagnostic,
+                        request.SpecificFileNameLevel,
+                        item.FileAttributeCount),
+                    Error: null));
             }
 
-            XDocument fragment = XDocument.Load(
-                outputPath,
-                LoadOptions.PreserveWhitespace);
-            return new SignerRuleGenerationResult(
-                request.Level,
-                new PolicyRuleFragment(fragment),
-                output.SignerCount,
-                output.HashRuleCount,
-                output.Diagnostic,
-                request.SpecificFileNameLevel,
-                output.FileAttributeCount);
+            return outcomes;
         }
         catch (JsonException exception)
         {
@@ -145,12 +185,62 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         }
     }
 
-    private ProcessStartInfo CreateStartInfo(
-        string sourcePath,
-        string outputPath,
-        SignerRuleLevel level,
-        PolicyRuleAction action,
-        SignerFileNameLevel? specificFileNameLevel)
+    private static SignerRuleGenerationRequest NormalizeRequest(
+        SignerRuleGenerationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        string sourcePath = Path.GetFullPath(request.FilePath);
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException(
+                "The signer evidence file could not be found.",
+                sourcePath);
+        }
+
+        return request with { FilePath = sourcePath };
+    }
+
+    private static void StartProcess(Process process)
+    {
+        try
+        {
+            if (!process.Start())
+            {
+                throw new PolicyBuildException(
+                    "Windows PowerShell could not be started for signer generation.");
+            }
+        }
+        catch (Win32Exception exception)
+        {
+            throw new PolicyBuildException(
+                "Windows PowerShell is unavailable, so signer rules cannot be generated.",
+                exception);
+        }
+    }
+
+    private static PowerShellSignerBatchOutput DeserializeOutput(
+        string standardOutput)
+    {
+        string? jsonLine = standardOutput
+            .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .LastOrDefault(line => line.StartsWith('{') && line.EndsWith('}'));
+        if (jsonLine is null)
+        {
+            throw new PolicyBuildException(
+                "ConfigCI signer generation completed without returning details.");
+        }
+
+        return JsonSerializer.Deserialize<PowerShellSignerBatchOutput>(
+                jsonLine,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new PolicyBuildException(
+                "ConfigCI returned empty signer-generation details.");
+    }
+
+    private ProcessStartInfo CreateBatchStartInfo(
+        string requestPath,
+        string outputDirectory)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -167,25 +257,35 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         startInfo.ArgumentList.Add("Bypass");
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(_scriptPath);
-        startInfo.ArgumentList.Add("-SourcePath");
-        startInfo.ArgumentList.Add(sourcePath);
-        startInfo.ArgumentList.Add("-OutputPath");
-        startInfo.ArgumentList.Add(outputPath);
-        startInfo.ArgumentList.Add("-Level");
-        startInfo.ArgumentList.Add(level.ToString());
-        startInfo.ArgumentList.Add("-Action");
-        startInfo.ArgumentList.Add(action.ToString());
-        if (specificFileNameLevel is not null)
-        {
-            startInfo.ArgumentList.Add("-SpecificFileNameLevel");
-            startInfo.ArgumentList.Add(specificFileNameLevel.Value.ToString());
-        }
-
+        startInfo.ArgumentList.Add("-RequestPath");
+        startInfo.ArgumentList.Add(requestPath);
+        startInfo.ArgumentList.Add("-OutputDirectory");
+        startInfo.ArgumentList.Add(outputDirectory);
         return startInfo;
+    }
+
+    private sealed class PowerShellSignerRequest
+    {
+        public required string SourcePath { get; init; }
+
+        public required string Level { get; init; }
+
+        public required string Action { get; init; }
+
+        public string? SpecificFileNameLevel { get; init; }
+    }
+
+    private sealed class PowerShellSignerBatchOutput
+    {
+        public IReadOnlyList<PowerShellSignerOutput> Results { get; init; } = [];
     }
 
     private sealed class PowerShellSignerOutput
     {
+        public int Index { get; init; }
+
+        public string? OutputFileName { get; init; }
+
         public int SignerCount { get; init; }
 
         public int HashRuleCount { get; init; }
@@ -193,5 +293,7 @@ public sealed class PowerShellSignerRuleGenerator : ISignerRuleGenerator
         public int FileAttributeCount { get; init; }
 
         public string? Diagnostic { get; init; }
+
+        public string? Error { get; init; }
     }
 }

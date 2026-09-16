@@ -151,9 +151,21 @@ public sealed record SignerRuleGenerationResult(
     public bool UsedHashFallback => HashRuleCount > 0;
 }
 
+public sealed record SignerRuleGenerationOutcome(
+    SignerRuleGenerationRequest Request,
+    SignerRuleGenerationResult? Result,
+    string? Error)
+{
+    public bool Succeeded => Result is not null && Error is null;
+}
+
 public interface ISignerRuleGenerator
 {
     Task<SignerRuleGenerationResult> GenerateAsync(
         SignerRuleGenerationRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<SignerRuleGenerationOutcome>> GenerateBatchAsync(
+        IReadOnlyList<SignerRuleGenerationRequest> requests,
         CancellationToken cancellationToken = default);
 }

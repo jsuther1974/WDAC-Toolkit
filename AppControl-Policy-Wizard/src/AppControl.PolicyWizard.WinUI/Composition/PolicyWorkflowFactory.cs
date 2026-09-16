@@ -1,5 +1,6 @@
 using AppControl.PolicyWizard.Core;
 using AppControl.PolicyWizard.Infrastructure.Windows;
+using System.Security.Cryptography;
 
 namespace AppControl.PolicyWizard.WinUI.Composition;
 
@@ -29,10 +30,20 @@ internal static class PolicyWorkflowFactory
 
     public static ISignerRuleGenerator CreateSignerRuleGenerator()
     {
-        return new PowerShellSignerRuleGenerator(
+        string scriptPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Scripts",
+            "CreateSignerRule.ps1");
+        string versionToken = Convert.ToHexString(
+            SHA256.HashData(File.ReadAllBytes(scriptPath)));
+        var generator = new PowerShellSignerRuleGenerator(scriptPath);
+        return new CachedSignerRuleGenerator(
+            generator,
             Path.Combine(
-                AppContext.BaseDirectory,
-                "Scripts",
-                "CreateSignerRule.ps1"));
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                "AppControl.PolicyWizard",
+                "SignerCache"),
+            versionToken);
     }
 }

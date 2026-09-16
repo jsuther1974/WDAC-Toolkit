@@ -908,7 +908,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
-            or InvalidDataException)
+            or InvalidDataException
+            or PolicyBuildException)
         {
             RuleWorkspaceInfoBar.Severity = InfoBarSeverity.Error;
             RuleWorkspaceInfoBar.Title = "The file could not be analyzed";
@@ -926,145 +927,188 @@ public sealed partial class MainWindow : Window
         string filePath,
         CancellationToken cancellationToken)
     {
+        IReadOnlyList<IReadOnlyList<PolicyRuleCandidate>> results =
+            await AnalyzeEvidenceFilesAsync([filePath], cancellationToken);
+        return results[0];
+    }
+
+    private async Task<IReadOnlyList<IReadOnlyList<PolicyRuleCandidate>>>
+        AnalyzeEvidenceFilesAsync(
+            IReadOnlyList<string> filePaths,
+            CancellationToken cancellationToken)
+    {
         PolicyConfigurationEditor configuration = _policyConfiguration
             ?? throw new InvalidOperationException(
                 "Load a policy before analyzing rule evidence.");
-        IReadOnlyList<PolicyRuleCandidate> baseCandidates =
-            await Task.Run(
+        if (filePaths.Count == 0)
+        {
+            return [];
+        }
+
+        Task<IReadOnlyList<PolicyRuleCandidate>>[] baseAnalysisTasks = filePaths
+            .Select(filePath => Task.Run(
                 () => _fileRuleCandidateAnalyzer.Analyze(
                     filePath,
                     PolicyRuleAction.Allow,
                     configuration.RuleGraph),
-                cancellationToken);
+                cancellationToken))
+            .ToArray();
+        IReadOnlyList<PolicyRuleCandidate>[] baseCandidateSets =
+            await Task.WhenAll(baseAnalysisTasks);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var candidates = baseCandidates.ToList();
-        PolicyRuleCandidate? signerPlaceholder = candidates.FirstOrDefault(
-            candidate => candidate.Identity == PolicyRuleIdentity.FilePublisher
-                && !candidate.CanApply);
-        PolicyRuleScenario signerScenario =
-            signerPlaceholder?.Scenario
-            ?? candidates.First(candidate =>
-                candidate.Identity == PolicyRuleIdentity.Hash).Scenario;
-        if (signerPlaceholder is not null)
+        var candidateSets = new List<PolicyRuleCandidate>[filePaths.Count];
+        var signerScenarios = new PolicyRuleScenario[filePaths.Count];
+        for (int fileIndex = 0; fileIndex < filePaths.Count; fileIndex++)
         {
-            candidates.Remove(signerPlaceholder);
+            var candidates = baseCandidateSets[fileIndex].ToList();
+            PolicyRuleCandidate? signerPlaceholder = candidates.FirstOrDefault(
+                candidate =>
+                    candidate.Identity == PolicyRuleIdentity.FilePublisher
+                    && !candidate.CanApply);
+            signerScenarios[fileIndex] =
+                signerPlaceholder?.Scenario
+                ?? candidates.First(candidate =>
+                    candidate.Identity == PolicyRuleIdentity.Hash).Scenario;
+            if (signerPlaceholder is not null)
+            {
+                candidates.Remove(signerPlaceholder);
+            }
+
+            candidateSets[fileIndex] = candidates;
         }
 
         PolicyRuleGraphSnapshot existingRules = configuration.RuleGraph;
-        SignerRuleGenerationRequest[] signerRequests =
-        [
-            new(
-                filePath,
-                SignerRuleLevel.FilePublisher,
-                PolicyRuleAction.Allow,
-                SignerFileNameLevel.OriginalFileName),
-            new(
-                filePath,
-                SignerRuleLevel.FilePublisher,
-                PolicyRuleAction.Allow,
-                SignerFileNameLevel.InternalName),
-            new(
-                filePath,
-                SignerRuleLevel.FilePublisher,
-                PolicyRuleAction.Allow,
-                SignerFileNameLevel.FileDescription),
-            new(
-                filePath,
-                SignerRuleLevel.FilePublisher,
-                PolicyRuleAction.Allow,
-                SignerFileNameLevel.ProductName),
-            new(
-                filePath,
-                SignerRuleLevel.FilePublisher,
-                PolicyRuleAction.Allow,
-                SignerFileNameLevel.PackageFamilyName),
-            new(
-                filePath,
-                SignerRuleLevel.FilePublisher,
-                PolicyRuleAction.Allow,
-                SignerFileNameLevel.FilePath),
-            new(
-                filePath,
-                SignerRuleLevel.Publisher,
-                PolicyRuleAction.Allow),
-            new(
-                filePath,
-                SignerRuleLevel.PcaCertificate,
-                PolicyRuleAction.Allow)
-        ];
-        using var generationGate = new SemaphoreSlim(initialCount: 4);
-        Task<PolicyRuleCandidate>[] generationTasks = signerRequests
-            .Select(async request =>
+        SignerRuleGenerationRequest[] signerRequests = filePaths
+            .SelectMany(CreateSignerRequests)
+            .ToArray();
+        IReadOnlyList<SignerRuleGenerationOutcome> outcomes =
+            await _signerRuleGenerator.GenerateBatchAsync(
+                signerRequests,
+                cancellationToken);
+        if (outcomes.Count != signerRequests.Length)
+        {
+            throw new InvalidDataException(
+                $"Signer generation returned {outcomes.Count} result(s) for "
+                + $"{signerRequests.Length} request(s).");
+        }
+
+        int outcomeIndex = 0;
+        for (int fileIndex = 0; fileIndex < filePaths.Count; fileIndex++)
+        {
+            string filePath = filePaths[fileIndex];
+            var signerCandidates = new List<PolicyRuleCandidate>(
+                SignerRequestsPerFile);
+            for (int requestIndex = 0;
+                requestIndex < SignerRequestsPerFile;
+                requestIndex++)
             {
-                await generationGate.WaitAsync(cancellationToken);
-                try
+                SignerRuleGenerationOutcome outcome = outcomes[outcomeIndex++];
+                PolicyRuleCandidate candidate;
+                if (outcome.Result is not null && outcome.Error is null)
                 {
-                    SignerRuleGenerationResult result =
-                        await _signerRuleGenerator.GenerateAsync(
-                            request,
-                            cancellationToken);
-                    return SignerRuleCandidateFactory.Create(
+                    candidate = SignerRuleCandidateFactory.Create(
                         filePath,
-                        signerScenario,
-                        result,
+                        signerScenarios[fileIndex],
+                        outcome.Result,
                         existingRules);
                 }
-                catch (Exception exception) when (exception is IOException
-                    or UnauthorizedAccessException
-                    or InvalidDataException
-                    or PolicyBuildException)
+                else
                 {
-                    return SignerRuleCandidateFactory.CreateUnavailable(
+                    candidate = SignerRuleCandidateFactory.CreateUnavailable(
                         filePath,
-                        signerScenario,
-                        request.Level,
-                        request.Action,
-                        exception.Message,
+                        signerScenarios[fileIndex],
+                        outcome.Request.Level,
+                        outcome.Request.Action,
+                        outcome.Error ?? "ConfigCI signer generation failed.",
                         isRecommended: false,
-                        request.SpecificFileNameLevel);
+                        outcome.Request.SpecificFileNameLevel);
                 }
-                finally
-                {
-                    generationGate.Release();
-                }
-            })
-            .ToArray();
-        var signerCandidates = (await Task.WhenAll(generationTasks)).ToList();
 
-        int recommendedSigner = signerCandidates.FindIndex(
-            candidate => candidate.CanApply);
-        if (recommendedSigner >= 0)
-        {
-            for (int index = 0; index < candidates.Count; index++)
-            {
-                candidates[index] = candidates[index] with
-                {
-                    IsRecommended = false
-                };
+                signerCandidates.Add(candidate);
             }
 
-            signerCandidates[recommendedSigner] =
-                signerCandidates[recommendedSigner] with
-                {
-                    IsRecommended = true
-                };
-        }
-        else if (!candidates.Any(candidate => candidate.IsRecommended))
-        {
-            int fallback = candidates.FindIndex(
+            List<PolicyRuleCandidate> candidates = candidateSets[fileIndex];
+            int recommendedSigner = signerCandidates.FindIndex(
                 candidate => candidate.CanApply);
-            if (fallback >= 0)
+            if (recommendedSigner >= 0)
             {
-                candidates[fallback] = candidates[fallback] with
+                for (int index = 0; index < candidates.Count; index++)
                 {
-                    IsRecommended = true
-                };
+                    candidates[index] = candidates[index] with
+                    {
+                        IsRecommended = false
+                    };
+                }
+
+                signerCandidates[recommendedSigner] =
+                    signerCandidates[recommendedSigner] with
+                    {
+                        IsRecommended = true
+                    };
             }
+            else if (!candidates.Any(candidate => candidate.IsRecommended))
+            {
+                int fallback = candidates.FindIndex(
+                    candidate => candidate.CanApply);
+                if (fallback >= 0)
+                {
+                    candidates[fallback] = candidates[fallback] with
+                    {
+                        IsRecommended = true
+                    };
+                }
+            }
+
+            candidates.InsertRange(0, signerCandidates);
         }
 
-        candidates.InsertRange(0, signerCandidates);
-        return candidates;
+        return candidateSets;
+    }
+
+    private const int SignerRequestsPerFile = 8;
+
+    private static IEnumerable<SignerRuleGenerationRequest>
+        CreateSignerRequests(string filePath)
+    {
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.FilePublisher,
+            PolicyRuleAction.Allow,
+            SignerFileNameLevel.OriginalFileName);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.FilePublisher,
+            PolicyRuleAction.Allow,
+            SignerFileNameLevel.InternalName);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.FilePublisher,
+            PolicyRuleAction.Allow,
+            SignerFileNameLevel.FileDescription);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.FilePublisher,
+            PolicyRuleAction.Allow,
+            SignerFileNameLevel.ProductName);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.FilePublisher,
+            PolicyRuleAction.Allow,
+            SignerFileNameLevel.PackageFamilyName);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.FilePublisher,
+            PolicyRuleAction.Allow,
+            SignerFileNameLevel.FilePath);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.Publisher,
+            PolicyRuleAction.Allow);
+        yield return new SignerRuleGenerationRequest(
+            filePath,
+            SignerRuleLevel.PcaCertificate,
+            PolicyRuleAction.Allow);
     }
 
     private async void AddRuleFolderButton_Click(
@@ -1240,30 +1284,45 @@ public sealed partial class MainWindow : Window
             int batchCount = (int)Math.Ceiling(
                 pendingIndices.Length
                 / (double)MaximumFolderAnalysisSelection);
-            for (int position = 0; position < pendingIndices.Length; position++)
+            for (int batchStart = 0;
+                batchStart < pendingIndices.Length;
+                batchStart += MaximumFolderAnalysisSelection)
             {
                 int batchNumber =
-                    position / MaximumFolderAnalysisSelection + 1;
-                FolderInventoryItem item =
-                    inventory.Items[pendingIndices[position]];
+                    batchStart / MaximumFolderAnalysisSelection + 1;
+                int[] batchIndices = pendingIndices
+                    .Skip(batchStart)
+                    .Take(MaximumFolderAnalysisSelection)
+                    .ToArray();
                 FolderInventoryStatus.Text =
                     $"Batch {batchNumber} of {batchCount} • "
-                    + $"file {position + 1} of {pendingIndices.Length}: "
-                    + item.RelativePath;
-                IReadOnlyList<PolicyRuleCandidate> candidates =
-                    await AnalyzeEvidenceFileAsync(
-                        item.Path,
+                    + $"analyzing {batchIndices.Length} file(s) in one "
+                    + "ConfigCI session...";
+                IReadOnlyList<IReadOnlyList<PolicyRuleCandidate>>
+                    batchCandidates = await AnalyzeEvidenceFilesAsync(
+                        batchIndices
+                            .Select(index => inventory.Items[index].Path)
+                            .ToArray(),
                         _folderOperationCancellation.Token);
-                foreach (PolicyRuleCandidate candidate in candidates)
-                {
-                    FolderRuleCandidateClusterer.AddOrMerge(
-                        _ruleCandidates,
-                        candidate);
-                }
 
-                _evidencePaths.Add(item.Path);
-                _analyzedFolderPaths.Add(item.Path);
-                UpdateFolderSelectionState();
+                for (int batchPosition = 0;
+                    batchPosition < batchIndices.Length;
+                    batchPosition++)
+                {
+                    FolderInventoryItem item =
+                        inventory.Items[batchIndices[batchPosition]];
+                    foreach (PolicyRuleCandidate candidate
+                        in batchCandidates[batchPosition])
+                    {
+                        FolderRuleCandidateClusterer.AddOrMerge(
+                            _ruleCandidates,
+                            candidate);
+                    }
+
+                    _evidencePaths.Add(item.Path);
+                    _analyzedFolderPaths.Add(item.Path);
+                    UpdateFolderSelectionState();
+                }
             }
 
             RefreshRuleCandidateList();
@@ -1290,7 +1349,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
-            or InvalidDataException)
+            or InvalidDataException
+            or PolicyBuildException)
         {
             FolderInventoryStatus.Text =
                 "Folder analysis stopped before all selected files were processed.";
